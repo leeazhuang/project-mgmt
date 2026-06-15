@@ -39,7 +39,7 @@ INSERT INTO `sys_role` (`id`, `name`, `code`, `description`, `is_enabled`, `crea
 INSERT INTO `sys_role` (`id`, `name`, `code`, `description`, `is_enabled`, `created_at`, `updated_at`) VALUES (6, '产品', 'product', '可查看需求和任务列表，不可编辑任务', 1, '2026-05-23 17:51:34', '2026-05-23 17:51:34');
 INSERT INTO `sys_role` (`id`, `name`, `code`, `description`, `is_enabled`, `created_at`, `updated_at`) VALUES (7, 'Bug反馈', 'bug_reporter', '只能提交和查看Bug', 1, '2026-05-23 17:51:34', '2026-05-23 17:51:34');
 -- sys_user
-INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `avatar`, `is_enabled`, `created_at`, `updated_at`, `wx_room_id`, `wx_user_id`, `wx_user_name`, `wx_room_name`) VALUES (1, 'admin', '$2b$12$uM3a2puIeh8UHesGhsVkLurB19Dl.z29hJ4O8vtVmadoG0C5pxfk6', '管理员', '', 1, '2026-05-22 20:00:11', '2026-06-15 11:43:54', '', '', '', '');
+INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `avatar`, `is_enabled`, `token_version`, `created_at`, `updated_at`, `wx_room_id`, `wx_user_id`, `wx_user_name`, `wx_room_name`) VALUES (1, 'admin', '$2b$12$uM3a2puIeh8UHesGhsVkLurB19Dl.z29hJ4O8vtVmadoG0C5pxfk6', '管理员', '', 1, 0, '2026-05-22 20:00:11', '2026-06-15 11:43:54', '', '', '', '');
 -- sys_role_menu
 INSERT INTO `sys_role_menu` (`id`, `role_id`, `menu_id`) VALUES (1, 1, 17);
 INSERT INTO `sys_role_menu` (`id`, `role_id`, `menu_id`) VALUES (2, 1, 18);

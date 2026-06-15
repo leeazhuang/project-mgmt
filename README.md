@@ -3,7 +3,7 @@
 面向团队的 **需求 / 任务 / Bug 协作平台**，前后端分离，企业微信群艾特通知，**Docker 一键部署、启动自动初始化、开箱即用**。
 
 - 技术栈：`FastAPI` + `Vue 3` + `Element Plus` + `MySQL`
-- 镜像：`registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:latest`
+- 镜像：`registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:<版本号>`（版本号按发布时间命名，形如 `20260615201740`；**无 `latest`**，部署与更新都用具体版本号）
 - 详细文档：见 [docs/项目说明.md](docs/项目说明.md)
 
 ---
@@ -31,8 +31,11 @@
 
 ### 1. 拉取镜像
 
+> 镜像按发布时间打 tag（如 `20260615201740`），**没有 `latest`**。下面用 `VERSION` 占位，替换成你要部署的版本号。
+
 ```bash
-docker pull registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:latest
+VERSION=20260615201740   # 替换成实际版本号
+docker pull registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:$VERSION
 ```
 
 ### 2. 准备配置文件 `/data/project-mgmt/.env`
@@ -54,7 +57,7 @@ docker run -d --name project-mgmt -p 8080:80 \
   -v /data/project-mgmt/.env:/app/backend/.env \
   -v /data/project-mgmt/uploads:/app/backend/uploads \
   --restart unless-stopped \
-  registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:latest
+  registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:$VERSION
 ```
 
 ### 4. 访问
@@ -102,9 +105,10 @@ mysql -h新地址 -uroot -p 新库名 < backup.sql
 docker logs -f project-mgmt          # 查看日志
 docker exec -it project-mgmt bash    # 进容器
 
-# 更新版本
-docker pull registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:latest
-docker rm -f project-mgmt && <重新执行上面的 docker run>
+# 更新版本（VERSION 换成新版本号；数据库外部独立、uploads 挂 volume，重建容器不丢数据，新容器启动自动补字段）
+VERSION=新版本号
+docker pull registry.cn-hangzhou.aliyuncs.com/leehaha-public/project-mgmt:$VERSION
+docker rm -f project-mgmt && <用新 $VERSION 重新执行上面的 docker run>
 ```
 
 ---

@@ -9,7 +9,8 @@
 import os
 import logging
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect as sa_inspect, text
+from sqlalchemy.schema import CreateColumn
 
 from app.config import settings
 from app.database import engine, SessionLocal, Base
@@ -36,6 +37,39 @@ def _ensure_database():
         logger.info(f"数据库 {settings.DB_NAME} 已就绪")
     finally:
         tmp_engine.dispose()
+
+
+def _auto_add_missing_columns():
+    """对【已存在】的表，自动补齐模型里新增的列（含类型/NOT NULL/默认值/注释）。
+
+    create_all 只建新表、不会给老表加列，所以已经在用本系统的人更新镜像后，
+    新增字段不会自动出现。这里逐表对比"模型列 vs 实际库列"，缺哪列就 ALTER 补哪列。
+
+    设计约束（新增字段时务必遵守）：
+    - 只做安全的 ADD COLUMN；不自动删列、不自动改类型（避免不可逆的数据丢失）。
+    - 新增 NOT NULL 列必须在模型里写 server_default，否则老数据行无法填充、ALTER 会失败。
+    """
+    inspector = sa_inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    added = []
+
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue  # 新表交给 create_all
+            db_cols = {c["name"] for c in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in db_cols:
+                    continue
+                # 用方言 DDL 编译器渲染列定义（自动处理类型/默认值/注释/引号）
+                col_spec = CreateColumn(col).compile(dialect=engine.dialect)
+                conn.exec_driver_sql(
+                    f"ALTER TABLE `{table.name}` ADD COLUMN {col_spec}"
+                )
+                added.append(f"{table.name}.{col.name}")
+
+    if added:
+        logger.info(f"自动补齐缺失字段（{len(added)}）：{', '.join(added)}")
 
 
 def _seed_if_empty():
@@ -77,5 +111,6 @@ def init_database():
     """容器/服务启动时调用：建库 → 建表 → 按需初始化"""
     _ensure_database()
     import app.models  # noqa: 确保所有模型注册到 Base
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)   # 建缺失的【表】
+    _auto_add_missing_columns()             # 给已存在的表补缺失的【列】
     _seed_if_empty()

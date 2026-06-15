@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -6,7 +7,7 @@ from app.dependencies import get_current_user
 from app.models.user import SysUser
 from app.schemas.common import ResponseModel
 from app.schemas.user import LoginRequest, LoginResponse, UserInfo
-from app.services.auth_service import verify_password, create_access_token
+from app.services.auth_service import verify_password, create_access_token, hash_password
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -41,7 +42,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if user.is_enabled != 1:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被禁用")
 
-    token = create_access_token(user.id)
+    token = create_access_token(user.id, user.token_version)
     data = LoginResponse(
         access_token=token,
         token_type="bearer",
@@ -79,3 +80,27 @@ def get_userinfo(current_user: SysUser = Depends(get_current_user)):
         menus=menu_tree,
     )
     return ResponseModel(data=data)
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+    confirm_password: str
+
+
+@router.post("/change-password", response_model=ResponseModel[None])
+def change_password(
+    body: ChangePasswordRequest,
+    current_user: SysUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.old_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    if not body.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能为空")
+    if body.new_password != body.confirm_password:
+        raise HTTPException(status_code=400, detail="两次输入的新密码不一致")
+    current_user.password_hash = hash_password(body.new_password)
+    current_user.token_version = (current_user.token_version or 0) + 1  # 作废所有已签发的旧 token
+    db.commit()
+    return ResponseModel(message="密码修改成功")

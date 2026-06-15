@@ -173,6 +173,7 @@ def reset_password(
 
     new_pwd = (body.new_password if body and body.new_password else None) or "123456"
     user.password_hash = hash_password(new_pwd)
+    user.token_version = (user.token_version or 0) + 1  # 作废该用户所有已签发的旧 token
     db.commit()
     return ResponseModel(message="密码重置成功")
 

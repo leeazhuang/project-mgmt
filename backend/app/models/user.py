@@ -41,6 +41,7 @@ class SysUser(Base):
     wx_user_name = Column(String(64), default="", comment="群成员昵称(回显)")
     avatar = Column(String(255), default="", comment="头像URL")
     is_enabled = Column(SmallInteger, default=1, comment="是否启用：0禁用/1启用")
+    token_version = Column(Integer, nullable=False, default=0, server_default="0", comment="令牌版本，改密/重置时+1使旧token失效")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
 
