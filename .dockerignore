@@ -1,0 +1,20 @@
+# 前端
+frontend/node_modules
+frontend/dist
+
+# 后端
+backend/__pycache__
+backend/**/__pycache__
+backend/**/*.pyc
+backend/.venv
+backend/venv
+backend/uploads
+backend/.env
+
+# 文档与杂项（不进镜像）
+docs
+.git
+.gitignore
+.claude
+*.md
+需求.txt

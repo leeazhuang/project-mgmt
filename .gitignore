@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 环境配置（含数据库密码，禁止提交）
+.env
+backend/.env
+
+# 前端依赖与构建产物
+frontend/node_modules/
+frontend/dist/
+
+# 附件上传（运行时数据）
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# 日志
+*.log
+build.log
+
+# 编辑器 / 本地工具
+.claude/
+.vscode/
+.idea/
+*.swp
+
+# 操作手册截图含真实员工姓名/企微群ID，公开仓库不提交
+docs/操作手册/
