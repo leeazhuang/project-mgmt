@@ -1,6 +1,7 @@
 from typing import Optional
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -72,6 +73,10 @@ def list_requirements(
             BizProjectMember.user_id == current_user.id
         ).subquery()
         query = query.filter(BizRequirement.project_id.in_(member_project_ids))
+        # 草稿（未提交）只有创建人自己可见，项目负责人/技术负责人等都看不到
+        query = query.filter(
+            or_(BizRequirement.status != "draft", BizRequirement.creator_id == current_user.id)
+        )
 
     if project_id and project_id.isdigit():
         query = query.filter(BizRequirement.project_id == int(project_id))
@@ -115,7 +120,19 @@ def create_requirement(
         creator_id=current_user.id,
         deadline=deadline,
     )
+    # 创建人若是该项目的技术负责人，需求直接进入"已接受"，无需提交审批、不通知项目负责人
+    is_tech_leader = project.tech_leader_id == current_user.id
+    if is_tech_leader:
+        req.status = "approved"
     db.add(req)
+    db.flush()
+    if is_tech_leader:
+        db.add(BizApprovalLog(
+            requirement_id=req.id,
+            operator_id=current_user.id,
+            action="approve",
+            remark="技术负责人创建需求，直接进入已接受",
+        ))
     db.commit()
     db.refresh(req)
     return ResponseModel(data=_req_to_dict(req))
@@ -133,6 +150,10 @@ def get_requirement(
 
     if not _is_super_admin(current_user) and not _is_project_member(db, req.project_id, current_user.id):
         raise HTTPException(status_code=403, detail="没有访问权限")
+
+    # 草稿（未提交）仅创建人可见
+    if req.status == "draft" and req.creator_id != current_user.id and not _is_super_admin(current_user):
+        raise HTTPException(status_code=403, detail="草稿需求仅创建人可见")
 
     return ResponseModel(data=_req_to_dict(req))
 
@@ -439,6 +460,62 @@ def set_estimated_deadline(
     # 通知需求创建人
     _notify_req(db, req.creator_id, "预计截止时间已设置",
                 f"您的需求《{req.title}》预计截止时间已设置为 {estimated_deadline}", req_id)
+
+    db.commit()
+    db.refresh(req)
+    return ResponseModel(data=_req_to_dict(req))
+
+
+@router.post("/{req_id}/delay", response_model=ResponseModel[dict])
+def delay_requirement(
+    req_id: int,
+    body: dict,
+    current_user: SysUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """项目负责人/技术负责人延期需求的预计截止时间"""
+    req = db.query(BizRequirement).filter(BizRequirement.id == req_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    if req.status != "developing":
+        raise HTTPException(status_code=400, detail="只有开发中的需求才能延期")
+
+    project = db.query(BizProject).filter(BizProject.id == req.project_id).first()
+    if not _is_super_admin(current_user) and current_user.id not in (project.owner_id, project.tech_leader_id):
+        raise HTTPException(status_code=403, detail="只有项目负责人或技术负责人可以延期")
+
+    new_deadline = body.get("estimated_deadline")
+    if not new_deadline:
+        raise HTTPException(status_code=400, detail="请提供新的预计截止时间")
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="请填写延期原因")
+
+    old_deadline = req.estimated_deadline.isoformat() if req.estimated_deadline else "未设置"
+    req.estimated_deadline = date.fromisoformat(new_deadline)
+
+    db.add(BizApprovalLog(
+        requirement_id=req_id,
+        operator_id=current_user.id,
+        action="delay",
+        remark=f"延期: {old_deadline} → {new_deadline}，原因: {reason}",
+    ))
+
+    # 通知创建人 + 技术负责人 + 项目负责人（操作人自己除外）
+    from app.services.notify_service import send_to_many as notify_many
+    notify_uids = set()
+    if req.creator_id:
+        notify_uids.add(req.creator_id)
+    if project.tech_leader_id:
+        notify_uids.add(project.tech_leader_id)
+    if project.owner_id:
+        notify_uids.add(project.owner_id)
+    notify_many(db, list(notify_uids),
+                "需求延期通知",
+                f"需求《{req.title}》预计截止时间延期至 {new_deadline}，原因: {reason}",
+                type="approval", related_id=req_id, related_type="requirement",
+                exclude_user_id=current_user.id)
 
     db.commit()
     db.refresh(req)

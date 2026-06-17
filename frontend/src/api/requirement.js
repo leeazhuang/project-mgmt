@@ -35,3 +35,7 @@ export function changeRequirementStatus(id, data) {
 export function setEstimatedDeadline(id, data) {
   return request.post(`/api/requirements/${id}/set-estimated-deadline`, data)
 }
+
+export function delayRequirement(id, data) {
+  return request.post(`/api/requirements/${id}/delay`, data)
+}

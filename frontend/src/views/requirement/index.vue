@@ -60,10 +60,10 @@
             <div class="action-btns">
               <el-button type="primary" size="small" text @click="$router.push(`/requirement/${row.id}`)">查看</el-button>
               <el-button
-                v-if="row.status === 'draft' || row.status === 'rejected'"
+                v-if="(row.status === 'draft' || row.status === 'rejected') && row.creator?.id === currentUserId"
                 type="primary" size="small" text @click="openDialog(row)">编辑</el-button>
               <el-button
-                v-if="row.status === 'draft' || row.status === 'rejected'"
+                v-if="(row.status === 'draft' || row.status === 'rejected') && row.creator?.id === currentUserId"
                 type="warning" size="small" text @click="handleSubmit(row)">提交需求</el-button>
             </div>
           </template>
@@ -143,6 +143,7 @@ import { listAttachments, deleteAttachment, bindAttachments } from '@/api/attach
 import { useUserStore } from '@/store/user'
 
 const userStore = useUserStore()
+const currentUserId = userStore.userInfo?.id
 
 const loading = ref(false)
 const submitting = ref(false)

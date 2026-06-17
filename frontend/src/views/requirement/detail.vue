@@ -12,8 +12,8 @@
           <el-tag :type="statusMap[req.status]?.type" size="large">{{ statusMap[req.status]?.label || req.status }}</el-tag>
         </div>
         <div class="req-actions">
-          <!-- 草稿/已拒绝 → 提交需求（创建人） -->
-          <template v-if="req.status === 'draft' || req.status === 'rejected'">
+          <!-- 草稿/已拒绝 → 提交需求（仅创建人） -->
+          <template v-if="(req.status === 'draft' || req.status === 'rejected') && isCreator">
             <el-button type="primary" @click="handleSubmitReq">提交需求</el-button>
           </template>
           <!-- 待处理 → 接受/拒绝（项目负责人） -->
@@ -27,6 +27,10 @@
               <el-button type="primary" disabled>创建任务</el-button>
             </el-tooltip>
             <el-button v-else type="primary" @click="openTaskDialog">创建任务</el-button>
+          </template>
+          <!-- 开发中 → 延期（项目负责人/技术负责人） -->
+          <template v-if="req.status === 'developing' && (isProjectOwner || isTechLeader)">
+            <el-button type="warning" plain @click="openDelayDialog">延期</el-button>
           </template>
           <!-- 开发中 → 标记完成（技术负责人） -->
           <template v-if="req.status === 'developing' && isTechLeader">
@@ -105,8 +109,13 @@
               <el-tag :type="taskStatusMap[row.status]?.type" size="small">{{ taskStatusMap[row.status]?.label || row.status }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="指派给" width="120">
-            <template #default="{ row }">{{ row.assignee?.real_name || row.assignee?.username || '未指派' }}</template>
+          <el-table-column label="指派给" min-width="140">
+            <template #default="{ row }">
+              <template v-if="row.assignees && row.assignees.length">
+                {{ row.assignees.map(a => a.user?.real_name || a.user?.username).filter(Boolean).join('、') }}
+              </template>
+              <template v-else>{{ row.assignee?.real_name || row.assignee?.username || '未指派' }}</template>
+            </template>
           </el-table-column>
           <el-table-column label="预估工时" width="100">
             <template #default="{ row }">{{ row.estimated_hours || '-' }}h</template>
@@ -224,6 +233,23 @@
       </template>
     </el-dialog>
 
+    <!-- Delay Dialog -->
+    <el-dialog v-model="delayVisible" title="需求延期" width="450px">
+      <el-form label-width="110px">
+        <el-form-item label="当前预计截止">{{ req.estimated_deadline || '未设置' }}</el-form-item>
+        <el-form-item label="延期至" required>
+          <el-date-picker v-model="delayDate" type="date" value-format="YYYY-MM-DD" placeholder="选择新的预计截止时间" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="延期原因" required>
+          <el-input v-model="delayReason" type="textarea" rows="3" placeholder="请输入延期原因（必填）" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="delayVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitDelay">确定延期</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Create Task Dialog -->
     <el-dialog v-model="taskDialogVisible" title="创建任务" width="600px" :close-on-click-modal="false">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-width="100px">
@@ -289,7 +315,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Upload } from '@element-plus/icons-vue'
 import RichEditor from '@/components/RichEditor.vue'
-import { getRequirement, submitRequirement, approveRequirement, listRequirementLogs, changeRequirementStatus, setEstimatedDeadline } from '@/api/requirement'
+import { getRequirement, submitRequirement, approveRequirement, listRequirementLogs, changeRequirementStatus, setEstimatedDeadline, delayRequirement } from '@/api/requirement'
 import { listTasks, createTask } from '@/api/task'
 import { listComments, createComment } from '@/api/comment'
 import { listAttachments, getDownloadUrl, bindAttachments, deleteAttachment } from '@/api/attachment'
@@ -332,6 +358,9 @@ const taskPendingFiles = ref([])
 const estimatedDeadline = ref('')
 const voidVisible = ref(false)
 const voidRemark = ref('')
+const delayVisible = ref(false)
+const delayDate = ref('')
+const delayReason = ref('')
 const commentInputRef = ref(null)
 const showMentionList = ref(false)
 const mentionIndex = ref(0)
@@ -397,6 +426,7 @@ const actionLabel = {
   reopen: '重新打开',
   voided: '作废需求',
   set_deadline: '设置预计截止时间',
+  delay: '延期',
 }
 
 async function loadReq() {
@@ -545,6 +575,30 @@ async function submitVoid() {
     loadReq()
     loadLogs()
     loadTasks()
+  } catch (e) {}
+}
+
+function openDelayDialog() {
+  delayDate.value = ''
+  delayReason.value = ''
+  delayVisible.value = true
+}
+
+async function submitDelay() {
+  if (!delayDate.value) {
+    ElMessage.warning('请选择延期至的日期')
+    return
+  }
+  if (!delayReason.value.trim()) {
+    ElMessage.warning('请输入延期原因')
+    return
+  }
+  try {
+    await delayRequirement(reqId, { estimated_deadline: delayDate.value, reason: delayReason.value })
+    ElMessage.success('延期成功')
+    delayVisible.value = false
+    loadReq()
+    loadLogs()
   } catch (e) {}
 }
 
