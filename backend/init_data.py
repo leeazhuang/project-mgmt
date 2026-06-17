@@ -89,7 +89,6 @@ def init():
         {"name": "编辑项目", "type": "button", "permission_code": "project:update", "parent_id": created_menus[1].id},
         # 需求管理按钮
         {"name": "新增需求", "type": "button", "permission_code": "requirement:create", "parent_id": created_menus[2].id},
-        {"name": "审批需求", "type": "button", "permission_code": "requirement:approve", "parent_id": created_menus[2].id},
         # 任务管理按钮
         {"name": "新增任务", "type": "button", "permission_code": "task:create", "parent_id": created_menus[3].id},
         # Bug管理按钮

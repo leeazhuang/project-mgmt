@@ -51,9 +51,9 @@
             ref="menuTreeRef"
             :data="menuTreeData"
             show-checkbox
+            check-strictly
             node-key="id"
             :props="{ label: 'name', children: 'children' }"
-            :default-checked-keys="roleForm.menu_ids"
             style="width:100%;max-height:300px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:8px"
           />
         </el-form-item>
@@ -67,7 +67,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { listRoles, createRole, updateRole, deleteRole } from '@/api/role'
@@ -134,15 +134,19 @@ function openDialog(role = null) {
     Object.assign(roleForm, { name: '', code: '', description: '', menu_ids: [] })
   }
   dialogVisible.value = true
+  // default-checked-keys 只在树首次挂载生效一次，el-dialog 不销毁导致复用旧状态；
+  // 每次打开主动用 setCheckedKeys 回填当前角色菜单，保证勾选与保存正确
+  nextTick(() => {
+    menuTreeRef.value?.setCheckedKeys(roleForm.menu_ids || [])
+  })
 }
 
 async function handleSubmit() {
   const valid = await roleFormRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  const checkedKeys = menuTreeRef.value?.getCheckedKeys() || []
-  const halfCheckedKeys = menuTreeRef.value?.getHalfCheckedKeys() || []
-  const menu_ids = [...new Set([...checkedKeys, ...halfCheckedKeys])]
+  // check-strictly 下父子独立，无半选，直接取勾选项即可
+  const menu_ids = menuTreeRef.value?.getCheckedKeys() || []
 
   submitting.value = true
   try {

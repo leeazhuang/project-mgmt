@@ -109,7 +109,7 @@ print("\n创建角色...")
 # 可以看到：首页、项目管理、需求管理（含审批）、任务管理、Bug管理、工时统计
 pm_menu_ids = home_id + get_menu_ids(
     "project:list", "project:create", "project:update",
-    "requirement:list", "requirement:create", "requirement:approve",
+    "requirement:list", "requirement:create",
     "任务管理",  # directory，会包含子菜单
     "task:list", "task:create",
     "bug:list", "bug:create",
