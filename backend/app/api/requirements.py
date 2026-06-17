@@ -60,6 +60,7 @@ def list_requirements(
     page_size: int = Query(20, ge=1, le=500),
     project_id: str = Query(""),
     status: str = Query(""),
+    priority: str = Query(""),
     keyword: str = Query(""),
     current_user: SysUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -79,6 +80,8 @@ def list_requirements(
             query = query.filter(BizRequirement.status.in_(status.split(",")))
         else:
             query = query.filter(BizRequirement.status == status)
+    if priority:
+        query = query.filter(BizRequirement.priority == priority)
     if keyword:
         query = query.filter(BizRequirement.title.contains(keyword))
 

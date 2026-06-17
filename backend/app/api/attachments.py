@@ -130,19 +130,17 @@ async def upload_editor_file(
     db.commit()
     db.refresh(att)
 
+    # editor 内嵌资源走不带 token 的稳定 URL（download 接口对 editor 资源免鉴权），
+    # 避免 token 过期后内联图片/视频失效
+    url = f"/api/attachments/{att.id}/download"
     return {
         "errno": 0,
         "data": {
-            "url": f"/api/attachments/{att.id}/download?token={_make_temp_token(current_user.id)}",
+            "url": url,
             "alt": original_name,
-            "href": f"/api/attachments/{att.id}/download?token={_make_temp_token(current_user.id)}",
+            "href": url,
         }
     }
-
-
-def _make_temp_token(user_id: int) -> str:
-    from app.services.auth_service import create_access_token
-    return create_access_token(user_id)
 
 
 @router.post("/bindTarget", response_model=ResponseModel[dict])
@@ -173,20 +171,20 @@ def download_attachment(
     token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    # Accept token from query param (for direct browser download links)
-    # or from Authorization header via normal dependency
-    user = None
-    if token:
-        user_id = decode_access_token(token)
-        if user_id:
-            user = db.query(SysUser).filter(SysUser.id == user_id).first()
-
-    if not user:
-        raise HTTPException(status_code=401, detail="未授权")
-
     att = db.query(BizAttachment).filter(BizAttachment.id == attachment_id).first()
     if not att:
         raise HTTPException(status_code=404, detail="附件不存在")
+
+    # editor 内嵌资源（富文本图片/视频）随 HTML 内联展示，免 token 鉴权；
+    # 否则历史内容里写死的过期 token 会导致图片失效。其余附件仍需有效 token。
+    if att.target_type != "editor":
+        user = None
+        if token:
+            user_id = decode_access_token(token)
+            if user_id:
+                user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="未授权")
 
     if att.storage == "oss":
         # 图片内联展示（编辑器图片），其他类型按附件下载
