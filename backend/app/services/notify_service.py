@@ -16,6 +16,7 @@
 后续切换推送方式只需修改本文件，业务代码无需改动。
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from sqlalchemy import event
@@ -26,6 +27,10 @@ from app.models.user import SysUser
 from app.services import wx_bot_service
 
 logger = logging.getLogger(__name__)
+
+# 通知发送线程池：把机器人 HTTP 调用挪出请求线程，
+# 避免机器人连不通时（每条最多 5s 超时 + 10s 兜底）阻塞业务接口响应
+_notify_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")
 
 
 # ============================================================
@@ -43,10 +48,13 @@ def _enqueue(db: Session, func):
 def _flush_pending_notify(session):
     pending = session.info.pop("_pending_notify", [])
     for fn in pending:
-        try:
-            fn()
-        except Exception as e:
-            logger.error(f"事务后通知发送失败: {e}")
+        # 丢到后台线程池异步发送，不阻塞当前请求线程（commit 后立即返回）
+        def _run(fn=fn):
+            try:
+                fn()
+            except Exception as e:
+                logger.error(f"事务后通知发送失败: {e}")
+        _notify_executor.submit(_run)
 
 
 @event.listens_for(SessionLocal, "after_soft_rollback")
