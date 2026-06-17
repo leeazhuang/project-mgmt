@@ -20,10 +20,15 @@ RUN npm run build
 # 国外环境可改回: FROM python:3.9-slim
 FROM docker.m.daocloud.io/library/python:3.9-slim
 
-# 系统依赖：仅 nginx（supervisor 改用 pip 装，避免 apt 反拉整套系统 python，更小更快）
+# 时区：东八区（容器默认 UTC，会导致时间晚 8 小时、定时任务/created_at 错乱）
+ENV TZ=Asia/Shanghai
+
+# 系统依赖：nginx + tzdata（supervisor 改用 pip 装，避免 apt 反拉整套系统 python，更小更快）
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
-    apt-get update && apt-get install -y --no-install-recommends nginx curl \
+    apt-get update && apt-get install -y --no-install-recommends nginx curl tzdata \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
