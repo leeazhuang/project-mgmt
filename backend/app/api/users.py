@@ -12,6 +12,10 @@ from app.services.auth_service import hash_password
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
 
 
+def _split_tags(value: str) -> list:
+    return [t.strip() for t in (value or "").split(",") if t.strip()]
+
+
 def _user_to_dict(user: SysUser) -> dict:
     return {
         "id": user.id,
@@ -21,6 +25,7 @@ def _user_to_dict(user: SysUser) -> dict:
         "wx_room_name": user.wx_room_name or "",
         "wx_user_id": user.wx_user_id or "",
         "wx_user_name": user.wx_user_name or "",
+        "display_tags": _split_tags(user.display_tags),
         "is_enabled": user.is_enabled,
         "created_at": user.created_at.strftime("%Y-%m-%d %H:%M:%S") if user.created_at else "",
         "roles": [{"id": r.id, "name": r.name, "code": r.code} for r in user.roles],
@@ -38,7 +43,8 @@ def user_options(
         SysUser.username != "admin",
     ).all()
     return ResponseModel(data=[
-        {"id": u.id, "username": u.username, "real_name": u.real_name}
+        {"id": u.id, "username": u.username, "real_name": u.real_name,
+         "display_tags": _split_tags(u.display_tags)}
         for u in users
     ])
 
@@ -82,6 +88,7 @@ def create_user(
         wx_room_name=body.wx_room_name,
         wx_user_id=body.wx_user_id,
         wx_user_name=body.wx_user_name,
+        display_tags=",".join(t.strip() for t in (body.display_tags or []) if t.strip()),
     )
 
     if body.role_ids:
@@ -129,6 +136,8 @@ def update_user(
         user.wx_user_name = body.wx_user_name
     if body.is_enabled is not None:
         user.is_enabled = body.is_enabled
+    if body.display_tags is not None:
+        user.display_tags = ",".join(t.strip() for t in body.display_tags if t.strip())
 
     if body.role_ids is not None:
         roles = db.query(SysRole).filter(SysRole.id.in_(body.role_ids)).all()

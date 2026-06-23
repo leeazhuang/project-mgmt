@@ -54,7 +54,7 @@
           </template>
         </el-table-column>
         <el-table-column label="指派给" width="110">
-          <template #default="{ row }">{{ row.assignee?.real_name || row.assignee?.username || '未指派' }}</template>
+          <template #default="{ row }">{{ bugAssigneeLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="创建人" width="100">
           <template #default="{ row }">{{ row.creator?.real_name || row.creator?.username || '-' }}</template>
@@ -91,8 +91,8 @@
     <el-dialog v-model="listAssignVisible" :title="listAssignIsReassign ? '重新指派Bug' : '指派Bug'" width="400px">
       <el-form label-width="80px">
         <el-form-item label="指派给">
-          <el-select v-model="listAssignUserId" filterable placeholder="请选择项目成员" style="width:100%">
-            <el-option v-for="m in listProjectMembers" :key="m.user_id || m.id" :label="m.real_name || m.username" :value="m.user_id || m.id" />
+          <el-select v-model="listAssignSelection" filterable placeholder="请选择项目成员" style="width:100%">
+            <el-option v-for="o in listAssignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -123,8 +123,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import BugCreateDialog from '@/components/BugCreateDialog.vue'
 import { listBugs, assignBug, reassignBug, rejectBug, startFix, markFixed, reopenBug } from '@/api/bug'
@@ -185,8 +185,33 @@ async function loadProjects() {
 // --- 列表操作相关 ---
 const listAssignVisible = ref(false)
 const listAssignBugId = ref(null)
-const listAssignUserId = ref(null)
+const listAssignSelection = ref('')
 const listAssignIsReassign = ref(false)
+
+const listAssignOptions = computed(() => {
+  const opts = []
+  for (const m of listProjectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    const tags = m.display_tags || []
+    if (tags.length) tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
+    else opts.push({ value: `${uid}::`, label: name })
+  }
+  return opts
+})
+
+function parseAssignSel(sel) {
+  const idx = (sel || '').indexOf('::')
+  if (idx < 0) return { user_id: Number(sel) || null, display_tag: '' }
+  return { user_id: Number(sel.slice(0, idx)) || null, display_tag: sel.slice(idx + 2) }
+}
+
+function bugAssigneeLabel(b) {
+  const tag = b.assignee_display_tag
+  const name = b.assignee?.real_name || b.assignee?.username
+  if (tag) return name ? `${tag}（${name}）` : tag
+  return name || '未指派'
+}
 const listRejectVisible = ref(false)
 const listRejectBugId = ref(null)
 const listRejectReason = ref('')
@@ -230,7 +255,7 @@ async function loadListMembers(projectId) {
 function openListAssign(row) {
   listAssignIsReassign.value = false
   listAssignBugId.value = row.id
-  listAssignUserId.value = null
+  listAssignSelection.value = ''
   loadListMembers(row.project_id)
   listAssignVisible.value = true
 }
@@ -238,19 +263,21 @@ function openListAssign(row) {
 function openListReassign(row) {
   listAssignIsReassign.value = true
   listAssignBugId.value = row.id
-  listAssignUserId.value = null
+  listAssignSelection.value = ''
   loadListMembers(row.project_id)
   listAssignVisible.value = true
 }
 
 async function submitListAssign() {
-  if (!listAssignUserId.value) { ElMessage.warning('请选择处理人'); return }
+  if (!listAssignSelection.value) { ElMessage.warning('请选择处理人'); return }
+  const { user_id, display_tag } = parseAssignSel(listAssignSelection.value)
+  if (!user_id) { ElMessage.warning('请选择处理人'); return }
   try {
     if (listAssignIsReassign.value) {
-      await reassignBug(listAssignBugId.value, { assignee_id: listAssignUserId.value })
+      await reassignBug(listAssignBugId.value, { assignee_id: user_id, display_tag })
       ElMessage.success('重新指派成功')
     } else {
-      await assignBug(listAssignBugId.value, { assignee_id: listAssignUserId.value })
+      await assignBug(listAssignBugId.value, { assignee_id: user_id, display_tag })
       ElMessage.success('指派成功')
     }
     listAssignVisible.value = false
@@ -278,7 +305,22 @@ async function handleListStartFix(row) {
 }
 
 async function handleListMarkFixed(row) {
-  try { await markFixed(row.id, {}); ElMessage.success('已标记修复'); loadBugs() } catch (e) {}
+  try {
+    const { value: reason } = await ElMessageBox.prompt(
+      '请填写本次 Bug 出现的具体原因（将通知提出人并记入流转记录）',
+      '标记已解决',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '例如：xxx 接口未做空值校验导致空指针',
+        inputValidator: (v) => (v && v.trim() ? true : '请填写出现原因'),
+      }
+    )
+    await markFixed(row.id, { reason: reason.trim() })
+    ElMessage.success('已标记修复')
+    loadBugs()
+  } catch (e) {}
 }
 
 const listReopenVisible = ref(false)

@@ -17,6 +17,7 @@ def _role_to_dict(role: SysRole) -> dict:
         "code": role.code,
         "description": role.description or "",
         "is_enabled": role.is_enabled,
+        "tag_only_view": role.tag_only_view or 0,
         "menu_ids": [m.id for m in role.menus],
     }
 
@@ -55,6 +56,7 @@ def create_role(
         name=body.name,
         code=body.code,
         description=body.description,
+        tag_only_view=body.tag_only_view or 0,
     )
 
     if body.menu_ids:
@@ -96,6 +98,8 @@ def update_role(
         role.description = body.description
     if body.is_enabled is not None:
         role.is_enabled = body.is_enabled
+    if body.tag_only_view is not None:
+        role.tag_only_view = body.tag_only_view
 
     if body.menu_ids is not None:
         menus = db.query(SysMenu).filter(SysMenu.id.in_(body.menu_ids)).all()

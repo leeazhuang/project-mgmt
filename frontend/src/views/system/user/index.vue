@@ -26,6 +26,12 @@
       <el-table :data="userList" v-loading="loading" border stripe style="width:100%">
         <el-table-column prop="username" label="用户名" width="120" />
         <el-table-column prop="real_name" label="姓名" width="100" />
+        <el-table-column label="展示标签" min-width="120">
+          <template #default="{ row }">
+            <el-tag v-for="t in (row.display_tags || [])" :key="t" size="small" type="info" style="margin-right:4px">{{ t }}</el-tag>
+            <span v-if="!(row.display_tags && row.display_tags.length)" style="color:#999">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="角色" min-width="140">
           <template #default="{ row }">
             <el-tag
@@ -105,6 +111,20 @@
         <el-form-item label="角色" prop="role_ids">
           <el-select v-model="userForm.role_ids" multiple placeholder="请选择角色" style="width:100%">
             <el-option v-for="role in roleOptions" :key="role.id" :label="role.name" :value="role.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="展示标签">
+          <el-select
+            v-model="userForm.display_tags"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            placeholder="输入标签后回车（可多个）；分配任务/Bug时可按标签代称展示"
+            style="width:100%"
+          >
+            <el-option v-for="t in userForm.display_tags" :key="t" :label="t" :value="t" />
           </el-select>
         </el-form-item>
         <el-form-item label="微信群" prop="wx_room_id">
@@ -197,6 +217,7 @@ const userForm = reactive({
   wx_room_name: '',
   wx_user_id: '',
   wx_user_name: '',
+  display_tags: [],
   is_enabled: true
 })
 
@@ -297,6 +318,7 @@ function openDialog(user = null) {
       wx_room_name: user.wx_room_name || '',
       wx_user_id: user.wx_user_id || '',
       wx_user_name: user.wx_user_name || '',
+      display_tags: Array.isArray(user.display_tags) ? [...user.display_tags] : [],
       is_enabled: user.is_enabled !== false
     })
     if (user.wx_room_id) loadMembers(user.wx_room_id)
@@ -305,6 +327,7 @@ function openDialog(user = null) {
       username: '', real_name: '', password: '',
       role_ids: [],
       wx_room_id: '', wx_room_name: '', wx_user_id: '', wx_user_name: '',
+      display_tags: [],
       is_enabled: true
     })
     memberOptions.value = []

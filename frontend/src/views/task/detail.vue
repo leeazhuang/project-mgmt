@@ -26,9 +26,9 @@
         </el-descriptions-item>
         <el-descriptions-item label="指派给">
           <template v-if="task.assignees && task.assignees.length">
-            <el-tag v-for="a in task.assignees" :key="a.user_id" size="small" style="margin-right:4px"
+            <el-tag v-for="(a, i) in task.assignees" :key="a.user_id || a.display_tag || i" size="small" style="margin-right:4px"
               :type="a.status === 'done' ? 'success' : a.status === 'in_progress' ? 'warning' : 'info'">
-              {{ a.user?.real_name || a.user?.username }}
+              {{ assigneeLabel(a) }}
               <span style="font-size:11px;margin-left:2px">({{ {pending:'待开始',in_progress:'进行中',done:'已完成'}[a.status] }})</span>
             </el-tag>
           </template>
@@ -56,7 +56,7 @@
     </el-card>
 
     <el-tabs v-model="activeTab" class="detail-tabs">
-      <!-- 流转记录 -->
+      <!-- 流转记录（仅看标签角色：后端已把真名脱敏成标签） -->
       <el-tab-pane label="流转记录" name="logs">
         <el-timeline v-if="taskLogs.length">
           <el-timeline-item
@@ -182,8 +182,8 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="指派给">
-          <el-select v-model="editForm.assignee_ids" multiple filterable placeholder="请选择（可多选）" style="width:100%">
-            <el-option v-for="m in projectMembers" :key="m.user_id || m.id" :label="m.real_name || m.username" :value="m.user_id || m.id" />
+          <el-select v-model="editForm.assignee_sel" multiple filterable placeholder="请选择（可多选，有标签的按标签选）" style="width:100%">
+            <el-option v-for="o in assignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="预计开始时间">
@@ -210,8 +210,8 @@
       </el-alert>
       <el-form label-width="80px">
         <el-form-item label="指派给">
-          <el-select v-model="reassignUserIds" multiple filterable placeholder="请选择项目成员（可多选）" style="width:100%">
-            <el-option v-for="m in projectMembers" :key="m.user_id || m.id" :label="m.real_name || m.username" :value="m.user_id || m.id" />
+          <el-select v-model="reassignSel" multiple filterable placeholder="请选择项目成员（可多选，有标签的按标签选）" style="width:100%">
+            <el-option v-for="o in assignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -257,13 +257,47 @@ const editSubmitting = ref(false)
 const editFormRef = ref(null)
 const editForm = ref({
   title: '', description: '', priority: 'medium', status: 'pending',
-  assignee_ids: [], planned_start_date: '', end_date: '', estimated_hours: null
+  assignee_sel: [], planned_start_date: '', end_date: '', estimated_hours: null
 })
 const editRules = { title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }] }
 
 // 重新指派
 const reassignVisible = ref(false)
-const reassignUserIds = ref([])
+const reassignSel = ref([])
+
+// 指派下拉：有标签的成员按标签拆成多个选项，无标签出真名；value 编码 "user_id::标签"
+const assignOptions = computed(() => {
+  const opts = []
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    const tags = m.display_tags || []
+    if (tags.length) tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
+    else opts.push({ value: `${uid}::`, label: name })
+  }
+  return opts
+})
+
+function parseSelList(selList) {
+  const ids = []
+  const tags = {}
+  for (const sel of selList || []) {
+    const idx = sel.indexOf('::')
+    const uid = Number(idx < 0 ? sel : sel.slice(0, idx))
+    const tag = idx < 0 ? '' : sel.slice(idx + 2)
+    if (!uid) continue
+    if (!ids.includes(uid)) ids.push(uid)
+    if (tag) tags[uid] = tag
+  }
+  return { ids, tags }
+}
+
+function assigneeLabel(a) {
+  const tag = a.display_tag
+  const name = a.user?.real_name || a.user?.username
+  if (tag) return name ? `${tag}（${name}）` : tag
+  return name || '未指派'
+}
 
 // @提及
 const showMentionList = ref(false)
@@ -491,7 +525,9 @@ function openEditDialog() {
     description: task.value.description || '',
     priority: task.value.priority || 'medium',
     status: task.value.status || 'pending',
-    assignee_ids: (task.value.assignees || []).map(a => a.user_id).filter(Boolean),
+    assignee_sel: (task.value.assignees || [])
+      .filter(a => a.user_id)
+      .map(a => `${a.user_id}::${a.display_tag || ''}`),
     planned_start_date: task.value.planned_start_date || '',
     end_date: task.value.end_date || '',
     estimated_hours: task.value.estimated_hours || null
@@ -505,11 +541,13 @@ async function handleEditSubmit() {
   if (!valid) return
   editSubmitting.value = true
   try {
+    const { ids, tags } = parseSelList(editForm.value.assignee_sel)
     await updateTask(taskId, {
       title: editForm.value.title,
       description: editForm.value.description,
       priority: editForm.value.priority,
-      assignee_ids: editForm.value.assignee_ids,
+      assignee_ids: ids,
+      assignee_tags: tags,
       planned_start_date: editForm.value.planned_start_date || null,
       end_date: editForm.value.end_date || null,
       estimated_hours: editForm.value.estimated_hours
@@ -525,15 +563,18 @@ async function handleEditSubmit() {
 }
 
 function openReassignDialog() {
-  reassignUserIds.value = (task.value.assignees || []).map(a => a.user_id).filter(Boolean)
+  reassignSel.value = (task.value.assignees || [])
+    .filter(a => a.user_id)
+    .map(a => `${a.user_id}::${a.display_tag || ''}`)
   loadProjectMembers()
   reassignVisible.value = true
 }
 
 async function handleReassign() {
-  if (!reassignUserIds.value.length) { ElMessage.warning('请选择指派人'); return }
+  if (!reassignSel.value.length) { ElMessage.warning('请选择指派人'); return }
+  const { ids, tags } = parseSelList(reassignSel.value)
   try {
-    await updateTask(taskId, { assignee_ids: reassignUserIds.value })
+    await updateTask(taskId, { assignee_ids: ids, assignee_tags: tags })
     ElMessage.success('重新指派成功')
     reassignVisible.value = false
     loadTask()

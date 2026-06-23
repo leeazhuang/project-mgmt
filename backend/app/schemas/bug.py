@@ -22,6 +22,13 @@ class BugUpdate(BaseModel):
 
 class BugAssign(BaseModel):
     assignee_id: int
+    # 分配时为该人选的展示标签快照，无标签则空
+    display_tag: str = ""
+
+
+class BugFixed(BaseModel):
+    # Bug 完成时填写的出现原因（必填）
+    reason: str = ""
 
 
 class BugReject(BaseModel):

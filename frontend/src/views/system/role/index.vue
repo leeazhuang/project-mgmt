@@ -46,6 +46,10 @@
         <el-form-item label="描述">
           <el-input v-model="roleForm.description" type="textarea" rows="2" placeholder="请输入描述" />
         </el-form-item>
+        <el-form-item label="仅看分配标签">
+          <el-switch v-model="roleForm.tag_only_view" :active-value="1" :inactive-value="0" />
+          <span style="margin-left:10px;color:#909399;font-size:12px">开启后，该角色查看任务/Bug时只看到分配标签，看不到真实指派人（含抓包），也看不到流转记录</span>
+        </el-form-item>
         <el-form-item label="菜单权限">
           <el-tree
             ref="menuTreeRef"
@@ -91,6 +95,7 @@ const roleForm = reactive({
   name: '',
   code: '',
   description: '',
+  tag_only_view: 0,
   menu_ids: []
 })
 
@@ -128,10 +133,11 @@ function openDialog(role = null) {
       name: role.name,
       code: role.code,
       description: role.description || '',
+      tag_only_view: role.tag_only_view || 0,
       menu_ids: role.menu_ids || (role.menus || []).map(m => m.id)
     })
   } else {
-    Object.assign(roleForm, { name: '', code: '', description: '', menu_ids: [] })
+    Object.assign(roleForm, { name: '', code: '', description: '', tag_only_view: 0, menu_ids: [] })
   }
   dialogVisible.value = true
   // default-checked-keys 只在树首次挂载生效一次，el-dialog 不销毁导致复用旧状态；

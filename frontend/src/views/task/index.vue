@@ -54,9 +54,9 @@
         <el-table-column label="指派给" min-width="130">
           <template #default="{ row }">
             <template v-if="row.assignees && row.assignees.length">
-              <el-tag v-for="a in row.assignees" :key="a.user_id" size="small" style="margin-right:2px"
+              <el-tag v-for="(a, i) in row.assignees" :key="a.user_id || a.display_tag || i" size="small" style="margin-right:2px"
                 :type="a.status === 'done' ? 'success' : a.status === 'in_progress' ? 'warning' : 'info'">
-                {{ a.user?.real_name || a.user?.username }}
+                {{ assigneeLabel(a) }}
               </el-tag>
             </template>
             <span v-else>{{ row.assignee?.real_name || '未指派' }}</span>
@@ -179,9 +179,9 @@
         <el-form-item v-if="editingTask && taskForm.status === 'voided'" label="状态">
           <el-tag type="danger">已作废</el-tag>
         </el-form-item>
-        <el-form-item label="指派给" prop="assignee_ids">
-          <el-select v-model="taskForm.assignee_ids" multiple filterable placeholder="请选择指派人（可多选）" style="width:100%">
-            <el-option v-for="u in userOptions" :key="u.id" :label="u.real_name || u.username" :value="u.id" />
+        <el-form-item label="指派给" prop="assignee_sel">
+          <el-select v-model="taskForm.assignee_sel" multiple filterable placeholder="请选择指派人（可多选，有标签的按标签选）" style="width:100%">
+            <el-option v-for="o in assignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="预计开始时间">
@@ -367,14 +367,48 @@ function isDelayed(row) {
 
 const taskForm = reactive({
   project_id: null, requirement_id: null, title: '', description: '', priority: 'medium',
-  status: 'pending', assignee_ids: [], planned_start_date: '', end_date: '', estimated_hours: null
+  status: 'pending', assignee_sel: [], planned_start_date: '', end_date: '', estimated_hours: null
 })
 
 const taskRules = {
   project_id: [{ required: true, message: '请选择项目', trigger: 'change' }],
   requirement_id: [{ required: true, message: '请选择需求', trigger: 'change' }],
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
-  assignee_ids: [{ required: true, message: '请选择指派人', trigger: 'change', type: 'array', min: 1 }]
+  assignee_sel: [{ required: true, message: '请选择指派人', trigger: 'change', type: 'array', min: 1 }]
+}
+
+// 指派下拉：有标签的成员按标签拆成多个选项，无标签出真名；value 编码 "user_id::标签"
+const assignOptions = computed(() => {
+  const opts = []
+  for (const u of userOptions.value) {
+    const tags = u.display_tags || []
+    if (tags.length) tags.forEach(t => opts.push({ value: `${u.id}::${t}`, label: t }))
+    else opts.push({ value: `${u.id}::`, label: u.real_name || u.username })
+  }
+  return opts
+})
+
+// 把 ["uid::tag", ...] 拆成 { ids:[uid], tags:{uid:tag} }，同一人多标签取最后一个
+function parseSelList(selList) {
+  const ids = []
+  const tags = {}
+  for (const sel of selList || []) {
+    const idx = sel.indexOf('::')
+    const uid = Number(idx < 0 ? sel : sel.slice(0, idx))
+    const tag = idx < 0 ? '' : sel.slice(idx + 2)
+    if (!uid) continue
+    if (!ids.includes(uid)) ids.push(uid)
+    if (tag) tags[uid] = tag
+  }
+  return { ids, tags }
+}
+
+// 指派给展示：有标签快照→标签(真名)，受限角色后端不返回真名则只显示标签
+function assigneeLabel(a) {
+  const tag = a.display_tag
+  const name = a.user?.real_name || a.user?.username
+  if (tag) return name ? `${tag}（${name}）` : tag
+  return name || '未指派'
 }
 
 async function loadTasks() {
@@ -476,14 +510,16 @@ function openDialog(task = null) {
       requirement_id: task.requirement_id,
       title: task.title, description: task.description || '',
       priority: task.priority || 'medium', status: task.status || 'pending',
-      assignee_ids: (task.assignees || []).map(a => a.user_id || a.user?.id).filter(Boolean),
+      assignee_sel: (task.assignees || [])
+        .filter(a => a.user_id)
+        .map(a => `${a.user_id}::${a.display_tag || ''}`),
       planned_start_date: task.planned_start_date || '', end_date: task.end_date || '',
       estimated_hours: task.estimated_hours || null
     })
   } else {
     Object.assign(taskForm, {
       project_id: null, requirement_id: null, title: '', description: '',
-      priority: 'medium', status: 'pending', assignee_id: null,
+      priority: 'medium', status: 'pending', assignee_sel: [],
       planned_start_date: '', end_date: '', estimated_hours: null
     })
     requirementOptions.value = []
@@ -496,12 +532,14 @@ async function handleSubmit() {
   if (!valid) return
   submitting.value = true
   try {
+    const { ids: assigneeIds, tags: assigneeTags } = parseSelList(taskForm.assignee_sel)
     if (editingTask.value) {
       const updateData = {
         title: taskForm.title,
         description: taskForm.description,
         priority: taskForm.priority,
-        assignee_ids: taskForm.assignee_ids,
+        assignee_ids: assigneeIds,
+        assignee_tags: assigneeTags,
         planned_start_date: taskForm.planned_start_date || null,
         end_date: taskForm.end_date || null,
         estimated_hours: taskForm.estimated_hours
@@ -514,7 +552,8 @@ async function handleSubmit() {
         title: taskForm.title,
         description: taskForm.description,
         priority: taskForm.priority,
-        assignee_ids: taskForm.assignee_ids,
+        assignee_ids: assigneeIds,
+        assignee_tags: assigneeTags,
         planned_start_date: taskForm.planned_start_date || null,
         end_date: taskForm.end_date || null,
         estimated_hours: taskForm.estimated_hours || 0

@@ -232,10 +232,14 @@ async function loadProject() {
       if (!isOwner && !isTech && !hasUpdate) {
         ElMessage.error('没有查看该项目详情的权限')
         router.replace('/project')
-        return
+        return false
       }
     }
+    return true
   } catch (e) {
+    // 后端 403/404 等：直接退回列表，避免停留在空详情页
+    router.replace('/project')
+    return false
   } finally {
     loading.value = false
   }
@@ -320,8 +324,10 @@ async function handleRemoveMember(member) {
   } catch (e) {}
 }
 
-onMounted(() => {
-  loadProject()
+onMounted(async () => {
+  // 先做权限校验，通过后再加载成员/需求/任务/Bug，避免无权用户闪现成员列表
+  const ok = await loadProject()
+  if (!ok) return
   loadMembers()
   loadRequirements()
   loadTasks()

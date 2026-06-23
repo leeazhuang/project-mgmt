@@ -45,7 +45,7 @@
           <el-tag :type="priorityMap[bug.priority]?.type" size="small">{{ priorityMap[bug.priority]?.label || bug.priority }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="创建人">{{ bug.creator?.real_name || bug.creator?.username || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="指派给">{{ bug.assignee?.real_name || bug.assignee?.username || '未指派' }}</el-descriptions-item>
+        <el-descriptions-item label="指派给">{{ bugAssigneeLabel(bug) }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ bug.created_at || '-' }}</el-descriptions-item>
         <el-descriptions-item label="环境信息">{{ bug.environment || '-' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ bug.updated_at || '-' }}</el-descriptions-item>
@@ -64,7 +64,7 @@
     </el-card>
 
     <el-tabs v-model="activeTab" class="detail-tabs">
-      <!-- 流转记录 -->
+      <!-- 流转记录（仅看标签角色：后端已把真名脱敏成标签） -->
       <el-tab-pane label="流转记录" name="logs">
         <el-timeline v-if="bugLogs.length">
           <el-timeline-item
@@ -171,8 +171,8 @@
     <el-dialog v-model="assignVisible" :title="assignDialogTitle" width="400px">
       <el-form label-width="80px">
         <el-form-item label="指派给">
-          <el-select v-model="assignUserId" filterable placeholder="请选择项目成员" style="width:100%">
-            <el-option v-for="m in projectMembers" :key="m.user_id || m.id" :label="m.real_name || m.username" :value="m.user_id || m.id" />
+          <el-select v-model="assignSelection" filterable placeholder="请选择项目成员" style="width:100%">
+            <el-option v-for="o in assignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -205,7 +205,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Upload } from '@element-plus/icons-vue'
 import { getBug, assignBug, reassignBug, rejectBug, startFix, markFixed, reopenBug, getBugLogs } from '@/api/bug'
 import { listComments, createComment } from '@/api/comment'
@@ -226,7 +226,7 @@ const activeTab = ref('logs')
 const newComment = ref('')
 const assignVisible = ref(false)
 const rejectVisible = ref(false)
-const assignUserId = ref(null)
+const assignSelection = ref('')
 const rejectReason = ref('')
 const isReassign = ref(false)
 const projectMembers = ref([])
@@ -251,6 +251,36 @@ const isTechLeader = computed(() => {
 })
 
 const assignDialogTitle = computed(() => isReassign.value ? '重新指派Bug' : '指派Bug')
+
+// 分配下拉：有标签的成员按标签拆成多个选项，无标签出真名；value 编码 "user_id::标签"
+const assignOptions = computed(() => {
+  const opts = []
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    const tags = m.display_tags || []
+    if (tags.length) {
+      tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
+    } else {
+      opts.push({ value: `${uid}::`, label: name })
+    }
+  }
+  return opts
+})
+
+function parseAssignSel(sel) {
+  const idx = (sel || '').indexOf('::')
+  if (idx < 0) return { user_id: Number(sel) || null, display_tag: '' }
+  return { user_id: Number(sel.slice(0, idx)) || null, display_tag: sel.slice(idx + 2) }
+}
+
+// 指派给展示：有标签快照→显示标签(真名)，受限角色后端不返回真名则只显示标签
+function bugAssigneeLabel(b) {
+  const tag = b.assignee_display_tag
+  const name = b.assignee?.real_name || b.assignee?.username
+  if (tag) return name ? `${tag}（${name}）` : tag
+  return name || '未指派'
+}
 
 const severityMap = {
   critical: { label: '严重', type: 'danger' },
@@ -334,24 +364,26 @@ async function loadProjectMembers() {
 
 function openAssignDialog() {
   isReassign.value = false
-  assignUserId.value = null
+  assignSelection.value = ''
   assignVisible.value = true
 }
 
 function openReassignDialog() {
   isReassign.value = true
-  assignUserId.value = null
+  assignSelection.value = ''
   assignVisible.value = true
 }
 
 async function submitAssign() {
-  if (!assignUserId.value) { ElMessage.warning('请选择处理人'); return }
+  if (!assignSelection.value) { ElMessage.warning('请选择处理人'); return }
+  const { user_id, display_tag } = parseAssignSel(assignSelection.value)
+  if (!user_id) { ElMessage.warning('请选择处理人'); return }
   try {
     if (isReassign.value) {
-      await reassignBug(bugId, { assignee_id: assignUserId.value })
+      await reassignBug(bugId, { assignee_id: user_id, display_tag })
       ElMessage.success('重新指派成功')
     } else {
-      await assignBug(bugId, { assignee_id: assignUserId.value })
+      await assignBug(bugId, { assignee_id: user_id, display_tag })
       ElMessage.success('指派成功')
     }
     assignVisible.value = false
@@ -386,7 +418,18 @@ async function handleStartFix() {
 
 async function handleMarkFixed() {
   try {
-    await markFixed(bugId, {})
+    const { value: reason } = await ElMessageBox.prompt(
+      '请填写本次 Bug 出现的具体原因（将通知提出人并记入流转记录）',
+      '标记已解决',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '例如：xxx 接口未做空值校验导致空指针',
+        inputValidator: (v) => (v && v.trim() ? true : '请填写出现原因'),
+      }
+    )
+    await markFixed(bugId, { reason: reason.trim() })
     ElMessage.success('已标记解决')
     loadBug()
     loadLogs()

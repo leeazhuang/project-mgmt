@@ -267,9 +267,9 @@
             <el-radio value="low">低</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="指派给" prop="assignee_ids">
-          <el-select v-model="taskForm.assignee_ids" multiple filterable placeholder="选择项目成员（可多选）" style="width:100%">
-            <el-option v-for="m in projectMembers" :key="m.user_id" :label="m.real_name || m.username" :value="m.user_id" />
+        <el-form-item label="指派给" prop="assignee_sel">
+          <el-select v-model="taskForm.assignee_sel" multiple filterable placeholder="选择项目成员（可多选，有标签的按标签选）" style="width:100%">
+            <el-option v-for="o in taskAssignOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="预估工时">
@@ -345,11 +345,38 @@ const taskSubmitting = ref(false)
 const taskFormRef = ref(null)
 const taskForm = ref({
   title: '', description: '', priority: 'medium',
-  assignee_id: null, estimated_hours: 0, planned_start_date: '', end_date: ''
+  assignee_sel: [], estimated_hours: 0, planned_start_date: '', end_date: ''
 })
 const taskRules = {
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
-  assignee_ids: [{ required: true, message: '请选择指派人', trigger: 'change', type: 'array', min: 1 }]
+  assignee_sel: [{ required: true, message: '请选择指派人', trigger: 'change', type: 'array', min: 1 }]
+}
+
+// 指派下拉：有标签的成员按标签拆成多个选项，无标签出真名；value 编码 "user_id::标签"
+const taskAssignOptions = computed(() => {
+  const opts = []
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    const tags = m.display_tags || []
+    if (tags.length) tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
+    else opts.push({ value: `${uid}::`, label: name })
+  }
+  return opts
+})
+
+function parseTaskSel(selList) {
+  const ids = []
+  const tags = {}
+  for (const sel of selList || []) {
+    const idx = sel.indexOf('::')
+    const uid = Number(idx < 0 ? sel : sel.slice(0, idx))
+    const tag = idx < 0 ? '' : sel.slice(idx + 2)
+    if (!uid) continue
+    if (!ids.includes(uid)) ids.push(uid)
+    if (tag) tags[uid] = tag
+  }
+  return { ids, tags }
 }
 
 const taskUploadHeaders = computed(() => ({ Authorization: `Bearer ${localStorage.getItem('token')}` }))
@@ -617,7 +644,7 @@ function openTaskDialog() {
   taskPendingFiles.value = []
   taskForm.value = {
     title: '', description: '', priority: 'medium',
-    assignee_ids: [], estimated_hours: 0, planned_start_date: '', end_date: ''
+    assignee_sel: [], estimated_hours: 0, planned_start_date: '', end_date: ''
   }
   loadProjectMembers()
   taskDialogVisible.value = true
@@ -628,12 +655,14 @@ async function handleCreateTask() {
   if (!valid) return
   taskSubmitting.value = true
   try {
+    const { ids, tags } = parseTaskSel(taskForm.value.assignee_sel)
     const newTask = await createTask({
       requirement_id: Number(reqId),
       title: taskForm.value.title,
       description: taskForm.value.description,
       priority: taskForm.value.priority,
-      assignee_ids: taskForm.value.assignee_ids,
+      assignee_ids: ids,
+      assignee_tags: tags,
       estimated_hours: taskForm.value.estimated_hours,
       planned_start_date: taskForm.value.planned_start_date || null,
       end_date: taskForm.value.end_date || null

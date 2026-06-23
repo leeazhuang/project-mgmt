@@ -3,15 +3,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import case
 
 from app.database import get_db
+from app.services.data_permission import is_tag_only_viewer
 from app.dependencies import get_current_user
 from app.models.user import SysUser
 from app.models.project import BizProject, BizProjectMember
 from app.models.bug import BizBug, BizBugLog
 from app.services.notify_service import send as notify, send_to_many as notify_many
 from app.schemas.common import ResponseModel, PageResult
-from app.schemas.bug import BugCreate, BugUpdate, BugAssign, BugReject, BugVerify
+from app.schemas.bug import BugCreate, BugUpdate, BugAssign, BugReject, BugVerify, BugFixed
 
 router = APIRouter(prefix="/api/bugs", tags=["Bug管理"])
 
@@ -22,7 +24,10 @@ def _user_brief(user: SysUser) -> dict:
     return {"id": user.id, "username": user.username, "real_name": user.real_name}
 
 
-def _bug_to_dict(bug: BizBug) -> dict:
+def _bug_to_dict(bug: BizBug, tag_only: bool = False) -> dict:
+    tag = bug.assignee_display_tag or ""
+    # 受限角色（仅看标签）+ 有标签快照 → 彻底隐藏真实处理人（抓包也拿不到真名）
+    hide = tag_only and bool(tag)
     return {
         "id": bug.id,
         "project_id": bug.project_id,
@@ -34,7 +39,8 @@ def _bug_to_dict(bug: BizBug) -> dict:
         "severity": bug.severity,
         "priority": bug.priority,
         "creator": _user_brief(bug.creator),
-        "assignee": _user_brief(bug.assignee) if bug.assignee else None,
+        "assignee": None if hide else (_user_brief(bug.assignee) if bug.assignee else None),
+        "assignee_display_tag": tag,
         "reject_reason": bug.reject_reason or "",
         "updated_at": bug.updated_at.strftime("%Y-%m-%d %H:%M:%S") if bug.updated_at else "",
         "created_at": bug.created_at.strftime("%Y-%m-%d %H:%M:%S") if bug.created_at else "",
@@ -109,8 +115,16 @@ def list_bugs(
         query = query.filter(BizBug.assignee_id == assignee_id)
 
     total = query.count()
-    bugs = query.order_by(BizBug.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    items = [_bug_to_dict(b) for b in bugs]
+    # 排序：未处理(待处理) > 进行中(已指派/修复中/重开) > 已完成(已修复/已验证/已驳回)，同桶内创建时间倒序
+    status_order = case(
+        (BizBug.status == "pending", 0),
+        (BizBug.status.in_(["assigned", "fixing", "reopened"]), 1),
+        else_=2,
+    )
+    bugs = query.order_by(status_order, BizBug.created_at.desc(), BizBug.id.desc()) \
+        .offset((page - 1) * page_size).limit(page_size).all()
+    tag_only = is_tag_only_viewer(current_user)
+    items = [_bug_to_dict(b, tag_only) for b in bugs]
     result = PageResult(items=items, total=total, page=page, page_size=page_size)
     return ResponseModel(data=result)
 
@@ -146,7 +160,7 @@ def create_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.get("/{bug_id}", response_model=ResponseModel[dict])
@@ -162,7 +176,7 @@ def get_bug(
     from app.services.data_permission import ensure_project_access
     ensure_project_access(db, bug.project_id, current_user)
 
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.put("/{bug_id}", response_model=ResponseModel[dict])
@@ -194,7 +208,7 @@ def update_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.delete("/{bug_id}", response_model=ResponseModel[None])
@@ -239,6 +253,7 @@ def assign_bug(
     assignee_name = assignee.real_name if assignee else ""
 
     bug.assignee_id = body.assignee_id
+    bug.assignee_display_tag = body.display_tag or ""
     bug.status = "assigned"
 
     _add_bug_log(db, bug.id, current_user.id, "assign", f"指派给 {assignee_name}")
@@ -246,7 +261,7 @@ def assign_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.post("/{bug_id}/reassign", response_model=ResponseModel[dict])
@@ -276,6 +291,7 @@ def reassign_bug(
     new_name = new_assignee.real_name if new_assignee else ""
 
     bug.assignee_id = body.assignee_id
+    bug.assignee_display_tag = body.display_tag or ""
     bug.status = "assigned"
     bug.resolved_at = None
 
@@ -284,7 +300,7 @@ def reassign_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.post("/{bug_id}/reject", response_model=ResponseModel[dict])
@@ -312,7 +328,7 @@ def reject_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.post("/{bug_id}/start-fix", response_model=ResponseModel[dict])
@@ -341,12 +357,13 @@ def start_fix(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.post("/{bug_id}/fixed", response_model=ResponseModel[dict])
 def mark_fixed(
     bug_id: int,
+    body: BugFixed,
     current_user: SysUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -360,16 +377,21 @@ def mark_fixed(
     if bug.assignee_id != current_user.id and not _is_super_admin(current_user):
         raise HTTPException(status_code=403, detail="只有指派人才能标记修复完成")
 
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="请填写Bug出现的具体原因")
+
     bug.status = "verified"
     bug.resolved_at = datetime.now()
     bug.closed_at = datetime.now()
 
-    _add_bug_log(db, bug.id, current_user.id, "fixed", "标记已解决，Bug已关闭")
-    _notify_bug(db, bug.creator_id, "Bug已解决", f"Bug《{bug.title}》已被标记为已解决", bug.id, bug.project_id)
+    _add_bug_log(db, bug.id, current_user.id, "fixed", f"标记已解决，Bug已关闭。原因：{reason}")
+    _notify_bug(db, bug.creator_id, "Bug已解决",
+                f"Bug《{bug.title}》已解决。原因：{reason}", bug.id, bug.project_id)
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 class ReopenRequest(BaseModel):
@@ -417,7 +439,7 @@ def reopen_bug(
 
     db.commit()
     db.refresh(bug)
-    return ResponseModel(data=_bug_to_dict(bug))
+    return ResponseModel(data=_bug_to_dict(bug, is_tag_only_viewer(current_user)))
 
 
 @router.get("/{bug_id}/logs", response_model=ResponseModel[list])
@@ -445,4 +467,11 @@ def get_bug_logs(
         }
         for lg in logs
     ]
+    # 受限角色（仅看标签）：日志里有标签的人的真名替换成标签，无标签的保持真名
+    if is_tag_only_viewer(current_user):
+        from app.services.data_permission import mask_log_items
+        ctx = {}
+        if bug.assignee and bug.assignee_display_tag:
+            ctx[bug.assignee.real_name] = bug.assignee_display_tag
+        items = mask_log_items(db, items, ctx)
     return ResponseModel(data=items)

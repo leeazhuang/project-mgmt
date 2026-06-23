@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import or_, case
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -91,7 +91,14 @@ def list_requirements(
         query = query.filter(BizRequirement.title.contains(keyword))
 
     total = query.count()
-    reqs = query.order_by(BizRequirement.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    # 排序：未处理(草稿/待审批/已通过) > 进行中(开发中) > 已完成(完成/关闭/拒绝/作废)，同桶内创建时间倒序
+    status_order = case(
+        (BizRequirement.status.in_(["draft", "pending", "approved"]), 0),
+        (BizRequirement.status == "developing", 1),
+        else_=2,
+    )
+    reqs = query.order_by(status_order, BizRequirement.created_at.desc(), BizRequirement.id.desc()) \
+        .offset((page - 1) * page_size).limit(page_size).all()
     items = [_req_to_dict(r) for r in reqs]
     result = PageResult(items=items, total=total, page=page, page_size=page_size)
     return ResponseModel(data=result)
@@ -133,6 +140,70 @@ def create_requirement(
             action="approve",
             remark="技术负责人创建需求，直接进入已接受",
         ))
+
+    # 技术负责人新建需求时直接建任务：设预计截止 + 自动建任务，全程不发任何通知
+    if is_tech_leader and body.assignee_ids:
+        if not body.estimated_deadline:
+            raise HTTPException(status_code=400, detail="直接建任务时请设置需求预计截止时间")
+        req.estimated_deadline = date.fromisoformat(body.estimated_deadline)
+        for uid in body.assignee_ids:
+            if not _is_project_member(db, body.project_id, uid):
+                raise HTTPException(status_code=400, detail=f"指派人(id={uid})必须是项目成员")
+
+        from app.models.task import BizTask, BizTaskAssignee, BizTaskLog
+        from app.models.attachment import BizAttachment
+        task = BizTask(
+            project_id=req.project_id,
+            requirement_id=req.id,
+            title=req.title,
+            description=req.description,
+            priority=req.priority,
+            assignee_id=body.assignee_ids[0],
+            assigner_id=current_user.id,
+            estimated_hours=body.estimated_hours or 0,
+            planned_start_date=date.today(),
+            end_date=date.fromisoformat(body.task_end_date) if body.task_end_date else None,
+        )
+        db.add(task)
+        db.flush()
+
+        tags = body.assignee_tags or {}
+        assignee_names = []
+        for uid in body.assignee_ids:
+            db.add(BizTaskAssignee(task_id=task.id, user_id=uid, display_tag=tags.get(uid, "") or ""))
+            u = db.query(SysUser).filter(SysUser.id == uid).first()
+            if u:
+                assignee_names.append(u.real_name)
+
+        # 复制需求附件到任务（同文件路径，复制一份行）
+        if body.attachment_ids:
+            atts = db.query(BizAttachment).filter(
+                BizAttachment.id.in_(body.attachment_ids),
+                BizAttachment.target_id == 0,
+                BizAttachment.uploader_id == current_user.id,
+            ).all()
+            for a in atts:
+                a.target_id = req.id
+                a.target_type = "requirement"
+                db.add(BizAttachment(
+                    target_id=task.id, target_type="task",
+                    file_name=a.file_name, file_path=a.file_path,
+                    file_size=a.file_size, file_type=a.file_type,
+                    storage=a.storage, uploader_id=a.uploader_id,
+                ))
+
+        names_str = "、".join(assignee_names)
+        req.status = "developing"
+        db.add(BizApprovalLog(
+            requirement_id=req.id, operator_id=current_user.id,
+            action="assign_task", remark=f"创建需求并直接分配任务《{task.title}》给 {names_str}，需求进入开发中",
+        ))
+        db.add(BizTaskLog(
+            task_id=task.id, operator_id=current_user.id,
+            action="create", remark=f"由需求直接创建，分配给 {names_str}",
+        ))
+        # 不发任何通知（需求2.3）
+
     db.commit()
     db.refresh(req)
     return ResponseModel(data=_req_to_dict(req))
@@ -413,8 +484,15 @@ def change_requirement_status(
                     type="approval", related_id=req_id, related_type="requirement",
                     exclude_user_id=current_user.id)
     elif new_status == "closed":
-        _notify_req(db, req.creator_id, "需求已完成",
-                    f"您的需求《{req.title}》已标记完成", req_id)
+        # 通知创建人 + 项目负责人（去重、排除操作人）
+        from app.services.notify_service import send_to_many as notify_many
+        notify_uids = [req.creator_id]
+        if project and project.owner_id:
+            notify_uids.append(project.owner_id)
+        notify_many(db, notify_uids, "需求已完成",
+                    f"需求《{req.title}》已标记完成",
+                    type="approval", related_id=req_id, related_type="requirement",
+                    exclude_user_id=current_user.id)
     elif new_status == "developing":
         if project and project.tech_leader_id:
             _notify_req(db, project.tech_leader_id, "需求重新打开",

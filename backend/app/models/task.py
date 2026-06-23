@@ -43,6 +43,7 @@ class BizTaskAssignee(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
     task_id = Column(Integer, ForeignKey("biz_task.id"), nullable=False, comment="任务ID")
     user_id = Column(Integer, ForeignKey("sys_user.id"), nullable=False, comment="被指派人ID")
+    display_tag = Column(String(64), nullable=False, default="", server_default="", comment="分配时选的展示标签快照，受限角色只见此标签")
     status = Column(String(20), default="pending", comment="个人状态：pending待开始/in_progress进行中/done已完成")
     start_date = Column(DateTime, nullable=True, comment="该人实际开始时间")
     completed_at = Column(DateTime, nullable=True, comment="该人完成时间")

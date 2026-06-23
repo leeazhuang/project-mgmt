@@ -24,6 +24,7 @@
           <el-radio value="medium">中</el-radio>
           <el-radio value="low">低</el-radio>
         </el-radio-group>
+        <div class="priority-tip">紧急=立即处理、高=今日需要处理、中=2天内处理、低=根据开发周期安排</div>
       </el-form-item>
       <el-form-item label="Bug描述">
         <RichEditor v-model="bugForm.description" />
@@ -165,4 +166,5 @@ async function handleSubmit() {
   line-height: 2;
 }
 .bug-guide b { color: #333; }
+.priority-tip { font-size: 12px; color: #909399; line-height: 1.6; margin-top: 4px; }
 </style>

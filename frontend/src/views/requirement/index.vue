@@ -88,7 +88,7 @@
     >
       <el-form ref="reqFormRef" :model="reqForm" :rules="reqRules" label-width="100px">
         <el-form-item label="所属项目" prop="project_id">
-          <el-select v-model="reqForm.project_id" filterable placeholder="请选择项目" style="width:100%">
+          <el-select v-model="reqForm.project_id" filterable placeholder="请选择项目" style="width:100%" @change="onReqProjectChange">
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </el-form-item>
@@ -123,6 +123,26 @@
             </template>
           </el-upload>
         </el-form-item>
+
+        <!-- 技术负责人新增需求可直接建任务（全程不通知） -->
+        <template v-if="showTaskFields">
+          <el-divider content-position="left">直接创建任务（你是该项目技术负责人，填了指派人即自动建任务，全程不通知）</el-divider>
+          <el-form-item label="预计截止时间">
+            <el-date-picker v-model="reqForm.estimated_deadline" type="date" value-format="YYYY-MM-DD" placeholder="需求预计截止时间（建任务时必填）" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="指派给">
+            <el-select v-model="reqForm.assignee_sel" multiple filterable placeholder="选择项目成员（有标签按标签选；填了就自动建任务）" style="width:100%">
+              <el-option v-for="o in assignOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="预估工时">
+            <el-input-number v-model="reqForm.estimated_hours" :min="0" :step="0.5" />
+            <span style="margin-left:8px">小时</span>
+          </el-form-item>
+          <el-form-item label="任务截止日期">
+            <el-date-picker v-model="reqForm.task_end_date" type="date" value-format="YYYY-MM-DD" placeholder="任务截止日期" style="width:100%" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -133,12 +153,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import RichEditor from '@/components/RichEditor.vue'
 import { listRequirements, createRequirement, updateRequirement, submitRequirement } from '@/api/requirement'
-import { listProjects } from '@/api/project'
+import { listProjects, listMembers } from '@/api/project'
 import { listAttachments, deleteAttachment, bindAttachments } from '@/api/attachment'
 import { useUserStore } from '@/store/user'
 
@@ -176,11 +196,59 @@ const uploadUrl = '/api/attachments'
 const uploadHeaders = { Authorization: `Bearer ${localStorage.getItem('token')}` }
 const uploadData = reactive({ target_id: 0, target_type: 'requirement' })
 
-const reqForm = reactive({ project_id: null, title: '', priority: 'medium', description: '' })
+const reqForm = reactive({
+  project_id: null, title: '', priority: 'medium', description: '',
+  // 技术负责人直接建任务用
+  estimated_deadline: '', assignee_sel: [], estimated_hours: 0, task_end_date: ''
+})
 const reqRules = {
   project_id: [{ required: true, message: '请选择项目', trigger: 'change' }],
   title: [{ required: true, message: '请输入需求标题', trigger: 'blur' }],
   priority: [{ required: true, message: '请选择优先级', trigger: 'change' }]
+}
+
+// 当前用户是否所选项目的技术负责人（新增时才显示直接建任务字段）
+const projectMembers = ref([])
+const showTaskFields = computed(() => {
+  if (editingReq.value || !reqForm.project_id) return false
+  const proj = projects.value.find(p => p.id === reqForm.project_id)
+  return proj && proj.tech_leader?.id === currentUserId
+})
+
+const assignOptions = computed(() => {
+  const opts = []
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    const tags = m.display_tags || []
+    if (tags.length) tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
+    else opts.push({ value: `${uid}::`, label: name })
+  }
+  return opts
+})
+
+function parseSelList(selList) {
+  const ids = []
+  const tags = {}
+  for (const sel of selList || []) {
+    const idx = sel.indexOf('::')
+    const uid = Number(idx < 0 ? sel : sel.slice(0, idx))
+    const tag = idx < 0 ? '' : sel.slice(idx + 2)
+    if (!uid) continue
+    if (!ids.includes(uid)) ids.push(uid)
+    if (tag) tags[uid] = tag
+  }
+  return { ids, tags }
+}
+
+async function onReqProjectChange() {
+  reqForm.assignee_sel = []
+  projectMembers.value = []
+  if (!reqForm.project_id) return
+  try {
+    const res = await listMembers(reqForm.project_id)
+    projectMembers.value = Array.isArray(res) ? res : (res.items || [])
+  } catch (e) { projectMembers.value = [] }
 }
 
 async function loadReqs() {
@@ -244,17 +312,22 @@ async function loadExistingAttachments(reqId) {
 
 function openDialog(req = null) {
   editingReq.value = req
+  projectMembers.value = []
   if (req) {
     Object.assign(reqForm, {
       project_id: req.project?.id || req.project_id,
       title: req.title,
       priority: req.priority || 'medium',
-      description: req.description || ''
+      description: req.description || '',
+      estimated_deadline: '', assignee_sel: [], estimated_hours: 0, task_end_date: ''
     })
     uploadData.target_id = req.id
     loadExistingAttachments(req.id)
   } else {
-    Object.assign(reqForm, { project_id: null, title: '', priority: 'medium', description: '' })
+    Object.assign(reqForm, {
+      project_id: null, title: '', priority: 'medium', description: '',
+      estimated_deadline: '', assignee_sel: [], estimated_hours: 0, task_end_date: ''
+    })
     uploadData.target_id = 0
     fileList.value = []
   }
@@ -267,15 +340,36 @@ async function handleFormSubmit() {
   submitting.value = true
   try {
     if (editingReq.value) {
-      await updateRequirement(editingReq.value.id, reqForm)
+      await updateRequirement(editingReq.value.id, {
+        title: reqForm.title, priority: reqForm.priority, description: reqForm.description,
+      })
       ElMessage.success('更新成功')
     } else {
-      const res = await createRequirement(reqForm)
-      const newId = res?.id || res
-      // 把临时上传（target_id=0）的附件关联到新需求
       const attachmentIds = fileList.value
         .map(f => f.attachmentId || f.response?.data?.id)
         .filter(Boolean)
+      const payload = {
+        project_id: reqForm.project_id, title: reqForm.title,
+        priority: reqForm.priority, description: reqForm.description,
+      }
+      // 技术负责人填了指派人 → 一并直接建任务（附件复制由后端处理）
+      if (showTaskFields.value && reqForm.assignee_sel.length) {
+        if (!reqForm.estimated_deadline) {
+          ElMessage.warning('直接建任务时请选择预计截止时间')
+          submitting.value = false
+          return
+        }
+        const { ids, tags } = parseSelList(reqForm.assignee_sel)
+        payload.estimated_deadline = reqForm.estimated_deadline
+        payload.assignee_ids = ids
+        payload.assignee_tags = tags
+        payload.estimated_hours = reqForm.estimated_hours || 0
+        payload.task_end_date = reqForm.task_end_date || null
+        payload.attachment_ids = attachmentIds
+      }
+      const res = await createRequirement(payload)
+      const newId = res?.id || res
+      // 普通流程：把临时上传（target_id=0）的附件关联到新需求（建任务流程后端已绑定，这里更新0行无副作用）
       if (attachmentIds.length && newId) {
         await bindAttachments({
           attachment_ids: attachmentIds,

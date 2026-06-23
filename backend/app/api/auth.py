@@ -70,6 +70,7 @@ def get_userinfo(current_user: SysUser = Depends(get_current_user)):
 
     menu_tree = _build_menu_tree(all_menus)
 
+    from app.services.data_permission import is_tag_only_viewer
     data = UserInfo(
         id=current_user.id,
         username=current_user.username,
@@ -78,6 +79,7 @@ def get_userinfo(current_user: SysUser = Depends(get_current_user)):
         roles=role_codes,
         permissions=list(permissions),
         menus=menu_tree,
+        tag_only_view=is_tag_only_viewer(current_user),
     )
     return ResponseModel(data=data)
 

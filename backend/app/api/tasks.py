@@ -3,9 +3,10 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, case
 
 from app.database import get_db
+from app.services.data_permission import is_tag_only_viewer
 from app.dependencies import get_current_user
 from app.models.user import SysUser
 from app.models.project import BizProject, BizProjectMember
@@ -24,24 +25,29 @@ def _user_brief(user: SysUser) -> dict:
     return {"id": user.id, "username": user.username, "real_name": user.real_name}
 
 
-def _assignee_to_dict(ta: BizTaskAssignee) -> dict:
+def _assignee_to_dict(ta: BizTaskAssignee, tag_only: bool = False) -> dict:
+    tag = ta.display_tag or ""
+    # 受限角色（仅看标签）+ 该分配有标签快照 → 彻底隐藏真实指派人（抓包也拿不到真名/user_id）
+    hide = tag_only and bool(tag)
     return {
         "id": ta.id,
-        "user_id": ta.user_id,
-        "user": _user_brief(ta.user),
+        "user_id": None if hide else ta.user_id,
+        "user": None if hide else _user_brief(ta.user),
+        "display_tag": tag,
         "status": ta.status,
         "start_date": ta.start_date.strftime("%Y-%m-%d %H:%M:%S") if ta.start_date else None,
         "completed_at": ta.completed_at.strftime("%Y-%m-%d %H:%M:%S") if ta.completed_at else None,
     }
 
 
-def _task_to_dict(task: BizTask) -> dict:
+def _task_to_dict(task: BizTask, tag_only: bool = False) -> dict:
     project = task.project
-    assignee_list = [_assignee_to_dict(ta) for ta in (task.assignees or [])]
-    # 向前兼容：如果有旧的 assignee_id 但没有子表数据
+    assignee_list = [_assignee_to_dict(ta, tag_only) for ta in (task.assignees or [])]
+    # 向前兼容：如果有旧的 assignee_id 但没有子表数据（无标签快照，按真名展示）
     if not assignee_list and task.assignee_id and task.assignee:
         assignee_list = [{"id": 0, "user_id": task.assignee_id, "user": _user_brief(task.assignee),
-                          "status": task.status, "start_date": None, "completed_at": None}]
+                          "display_tag": "", "status": task.status, "start_date": None, "completed_at": None}]
+    primary_assignee = assignee_list[0]["user"] if assignee_list else None
     return {
         "id": task.id,
         "project_id": task.project_id,
@@ -55,10 +61,8 @@ def _task_to_dict(task: BizTask) -> dict:
         "status": task.status,
         "priority": task.priority,
         "assignees": assignee_list,
-        # 向前兼容单人字段
-        "assignee": _user_brief(task.assignee) if task.assignee else (
-            assignee_list[0]["user"] if assignee_list else None
-        ),
+        # 向前兼容单人字段（从已脱敏的 assignee_list 取，受限角色不会泄露真名）
+        "assignee": primary_assignee,
         "assigner": _user_brief(task.assigner),
         "estimated_hours": float(task.estimated_hours) if task.estimated_hours else 0,
         "actual_hours": float(task.actual_hours) if task.actual_hours else 0,
@@ -176,8 +180,16 @@ def list_tasks(
         query = query.filter(or_(BizTask.assignee_id == aid, BizTask.id.in_(sub)))
 
     total = query.count()
-    tasks = query.order_by(BizTask.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    items = [_task_to_dict(t) for t in tasks]
+    # 排序：未处理 > 进行中 > 已完成（含作废），同桶内按创建时间倒序
+    status_order = case(
+        (BizTask.status == "pending", 0),
+        (BizTask.status == "in_progress", 1),
+        else_=2,
+    )
+    tasks = query.order_by(status_order, BizTask.created_at.desc(), BizTask.id.desc()) \
+        .offset((page - 1) * page_size).limit(page_size).all()
+    tag_only = is_tag_only_viewer(current_user)
+    items = [_task_to_dict(t, tag_only) for t in tasks]
     result = PageResult(items=items, total=total, page=page, page_size=page_size)
     return ResponseModel(data=result)
 
@@ -217,9 +229,10 @@ def get_board(
             query = query.filter(BizTask.project_id.in_(member_project_ids))
 
     tasks = query.all()
+    tag_only = is_tag_only_viewer(current_user)
     board = {"pending": [], "in_progress": [], "done": [], "voided": []}
     for t in tasks:
-        td = _task_to_dict(t)
+        td = _task_to_dict(t, tag_only)
         board.get(t.status, board["pending"]).append(td)
     return ResponseModel(data=board)
 
@@ -270,9 +283,10 @@ def create_task(
     db.add(task)
     db.flush()
 
-    # 创建多人子表
+    # 创建多人子表，记录分配时选的展示标签快照
+    tags = body.assignee_tags or {}
     for uid in body.assignee_ids:
-        db.add(BizTaskAssignee(task_id=task.id, user_id=uid))
+        db.add(BizTaskAssignee(task_id=task.id, user_id=uid, display_tag=tags.get(uid, "") or ""))
 
     # 需求状态联动
     from app.models.requirement import BizApprovalLog
@@ -305,7 +319,7 @@ def create_task(
 
     db.commit()
     db.refresh(task)
-    return ResponseModel(data=_task_to_dict(task))
+    return ResponseModel(data=_task_to_dict(task, is_tag_only_viewer(current_user)))
 
 
 # ==================== GET ====================
@@ -329,7 +343,7 @@ def get_task(
        task.assignee_id != current_user.id:
         raise HTTPException(status_code=403, detail="没有访问权限")
 
-    return ResponseModel(data=_task_to_dict(task))
+    return ResponseModel(data=_task_to_dict(task, is_tag_only_viewer(current_user)))
 
 
 # ==================== UPDATE / STATUS ====================
@@ -376,12 +390,15 @@ def update_task(
             if uid not in new_ids:
                 db.delete(ta)
         # 添加新人（状态 pending），已存在的人保持原状态不动
+        tags = body.assignee_tags or {}
         new_names = []
         for uid in new_ids:
             if not _is_project_member(db, task.project_id, uid):
                 raise HTTPException(status_code=400, detail=f"指派人(id={uid})必须是项目成员")
             if uid not in existing:
-                db.add(BizTaskAssignee(task_id=task_id, user_id=uid))
+                db.add(BizTaskAssignee(task_id=task_id, user_id=uid, display_tag=tags.get(uid, "") or ""))
+            elif uid in tags:
+                existing[uid].display_tag = tags.get(uid, "") or ""
             u = db.query(SysUser).filter(SysUser.id == uid).first()
             if u:
                 new_names.append(u.real_name)
@@ -481,16 +498,25 @@ def update_task(
             if all(s == "done" for s in statuses):
                 task.status = "done"
                 task.completed_at = datetime.now()
-                _add_task_log(db, task.id, current_user.id, "done", "所有人已完成，任务自动完成")
-                # 通知指派人和项目/技术负责人（不通知已完成的成员）
                 project = db.query(BizProject).filter(BizProject.id == task.project_id).first()
-                leader_ids = [task.assigner_id]
-                if project:
-                    leader_ids += [project.tech_leader_id, project.owner_id]
-                notify_many(db, [i for i in leader_ids if i],
-                            "任务已全部完成", f"任务《{task.title}》所有成员已完成",
-                            type="task", related_id=task.id, related_type="task",
-                            exclude_user_id=current_user.id)
+                if len(all_assignees) <= 1:
+                    # 单人任务：指派人点完成即完成，只记一条记录（上面个人 done 日志），
+                    # 只发一条「任务完成」通知给 技术负责人+项目负责人，不再重复"所有人完成"
+                    recipients = [project.tech_leader_id, project.owner_id] if project else []
+                    notify_many(db, [i for i in recipients if i],
+                                "任务完成", f"任务《{task.title}》已完成",
+                                type="task", related_id=task.id, related_type="task",
+                                exclude_user_id=current_user.id)
+                else:
+                    _add_task_log(db, task.id, current_user.id, "done", "所有人已完成，任务自动完成")
+                    # 通知指派人和项目/技术负责人（不通知已完成的成员）
+                    leader_ids = [task.assigner_id]
+                    if project:
+                        leader_ids += [project.tech_leader_id, project.owner_id]
+                    notify_many(db, [i for i in leader_ids if i],
+                                "任务已全部完成", f"任务《{task.title}》所有成员已完成",
+                                type="task", related_id=task.id, related_type="task",
+                                exclude_user_id=current_user.id)
             else:
                 if body.status == "done":
                     # 个人完成但还有人未完成：通知技术负责人个人进度
@@ -527,7 +553,7 @@ def update_task(
 
     db.commit()
     db.refresh(task)
-    return ResponseModel(data=_task_to_dict(task))
+    return ResponseModel(data=_task_to_dict(task, is_tag_only_viewer(current_user)))
 
 
 # ==================== DELETE ====================
@@ -568,6 +594,12 @@ def get_task_logs(
         "new_value": lg.new_value or "",
         "created_at": lg.created_at.strftime("%Y-%m-%d %H:%M:%S") if lg.created_at else "",
     } for lg in logs]
+    # 受限角色（仅看标签）：日志里有标签的人的真名替换成标签，无标签的保持真名
+    if is_tag_only_viewer(current_user):
+        from app.services.data_permission import mask_log_items
+        ctx = {ta.user.real_name: ta.display_tag for ta in (task.assignees or [])
+               if ta.display_tag and ta.user}
+        items = mask_log_items(db, items, ctx)
     return ResponseModel(data=items)
 
 
@@ -607,7 +639,7 @@ def delay_task(
 
     db.commit()
     db.refresh(task)
-    return ResponseModel(data=_task_to_dict(task))
+    return ResponseModel(data=_task_to_dict(task, is_tag_only_viewer(current_user)))
 
 
 # ==================== VOID ====================
@@ -643,4 +675,4 @@ def void_task(
 
     db.commit()
     db.refresh(task)
-    return ResponseModel(data=_task_to_dict(task))
+    return ResponseModel(data=_task_to_dict(task, is_tag_only_viewer(current_user)))

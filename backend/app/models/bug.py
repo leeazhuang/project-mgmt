@@ -19,6 +19,7 @@ class BizBug(Base):
     priority = Column(String(20), default="medium", comment="优先级：urgent紧急/high高/medium中/low低")
     creator_id = Column(Integer, ForeignKey("sys_user.id"), nullable=False, comment="创建人ID")
     assignee_id = Column(Integer, ForeignKey("sys_user.id"), nullable=True, comment="处理人ID")
+    assignee_display_tag = Column(String(64), nullable=False, default="", server_default="", comment="分配时选的展示标签快照，受限角色只见此标签")
     reject_reason = Column(Text, default="", comment="驳回原因")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")

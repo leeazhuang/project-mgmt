@@ -8,6 +8,13 @@ class RequirementCreate(BaseModel):
     description: str = ""
     priority: str = "medium"
     deadline: Optional[str] = None
+    # 技术负责人新建需求时可一并直接建任务（全程不通知）
+    estimated_deadline: Optional[str] = None       # 需求预计截止时间
+    assignee_ids: Optional[list[int]] = None       # 任务指派人（提供则触发自动建任务）
+    assignee_tags: Optional[dict[int, str]] = None  # 指派人对应展示标签快照
+    estimated_hours: Optional[float] = None        # 任务预估工时
+    task_end_date: Optional[str] = None            # 任务截止日期
+    attachment_ids: Optional[list[int]] = None     # 需求附件ID（复制到任务）
 
 
 class RequirementUpdate(BaseModel):

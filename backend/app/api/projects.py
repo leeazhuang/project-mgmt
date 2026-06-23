@@ -238,6 +238,7 @@ def list_members(
             "user_id": m.user_id,
             "username": m.user.username if m.user else "",
             "real_name": m.user.real_name if m.user else "",
+            "display_tags": [t.strip() for t in (m.user.display_tags or "").split(",") if t.strip()] if m.user else [],
             "joined_at": m.joined_at.strftime("%Y-%m-%d %H:%M:%S") if m.joined_at else "",
         }
         for m in members

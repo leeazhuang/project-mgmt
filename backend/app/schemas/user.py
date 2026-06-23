@@ -23,6 +23,7 @@ class UserInfo(BaseModel):
     roles: list[str]
     permissions: list[str]
     menus: list[dict]
+    tag_only_view: bool = False  # 仅看分配标签角色：前端据此隐藏流转记录等
 
     class Config:
         from_attributes = True
@@ -37,6 +38,7 @@ class UserCreate(BaseModel):
     wx_user_id: str = ""
     wx_user_name: str = ""
     role_ids: list[int] = []
+    display_tags: list[str] = []
 
 
 class UserUpdate(BaseModel):
@@ -47,6 +49,7 @@ class UserUpdate(BaseModel):
     wx_user_name: Optional[str] = None
     is_enabled: Optional[int] = None
     role_ids: Optional[list[int]] = None
+    display_tags: Optional[list[str]] = None
 
 
 class UserListItem(BaseModel):

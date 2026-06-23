@@ -8,6 +8,8 @@ class TaskCreate(BaseModel):
     description: str = ""
     priority: str = "medium"
     assignee_ids: list[int] = []
+    # 分配时为某人选的展示标签快照：{user_id: 标签}，无标签的人不传或传空
+    assignee_tags: Optional[dict[int, str]] = None
     estimated_hours: float = 0
     planned_start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -19,6 +21,7 @@ class TaskUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     assignee_ids: Optional[list[int]] = None
+    assignee_tags: Optional[dict[int, str]] = None
     estimated_hours: Optional[float] = None
     planned_start_date: Optional[str] = None
     end_date: Optional[str] = None
