@@ -382,8 +382,10 @@ const assignOptions = computed(() => {
   const opts = []
   for (const u of userOptions.value) {
     const tags = u.display_tags || []
-    if (tags.length) tags.forEach(t => opts.push({ value: `${u.id}::${t}`, label: t }))
-    else opts.push({ value: `${u.id}::`, label: u.real_name || u.username })
+    const name = u.real_name || u.username
+    // 始终保留真名选项（即便打了标签也能按真名选）；标签选项 label 带上真名
+    opts.push({ value: `${u.id}::`, label: name })
+    tags.forEach(t => opts.push({ value: `${u.id}::${t}`, label: `${t}（${name}）` }))
   }
   return opts
 })

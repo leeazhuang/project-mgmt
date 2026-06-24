@@ -202,7 +202,11 @@ def create_requirement(
             task_id=task.id, operator_id=current_user.id,
             action="create", remark=f"由需求直接创建，分配给 {names_str}",
         ))
-        # 不发任何通知（需求2.3）
+        # 通知所有被分配人（技术负责人直接建任务也要通知指派人）
+        from app.services.notify_service import send_to_many as notify_many
+        notify_many(db, body.assignee_ids, "新任务指派", f"您有新的任务《{task.title}》",
+                    type="task", related_id=task.id, related_type="task",
+                    exclude_user_id=current_user.id)
 
     db.commit()
     db.refresh(req)

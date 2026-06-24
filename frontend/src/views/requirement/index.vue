@@ -221,8 +221,8 @@ const assignOptions = computed(() => {
     const uid = m.user_id || m.id
     const name = m.real_name || m.username
     const tags = m.display_tags || []
-    if (tags.length) tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: t }))
-    else opts.push({ value: `${uid}::`, label: name })
+    opts.push({ value: `${uid}::`, label: name })
+    tags.forEach(t => opts.push({ value: `${uid}::${t}`, label: `${t}（${name}）` }))
   }
   return opts
 })
