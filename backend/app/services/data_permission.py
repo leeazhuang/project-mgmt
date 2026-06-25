@@ -27,33 +27,55 @@ def is_tag_only_viewer(user: SysUser) -> bool:
     return any(getattr(r, "tag_only_view", 0) == 1 for r in user.roles)
 
 
-def mask_log_items(db: Session, items: list, context_name_tag: dict) -> list:
-    """对流转记录做脱敏：把「有标签的用户」的真实姓名替换成展示标签。
+def mask_text(text: str, name_tag: dict) -> str:
+    """把文本里出现的真名替换成对应标签。长名字优先，避免姓名互相包含时替换错。"""
+    if not text or not name_tag:
+        return text
+    for nm in sorted((n for n in name_tag if n), key=len, reverse=True):
+        if nm in text:
+            text = text.replace(nm, name_tag[nm])
+    return text
 
-    规则（与指派人展示一致）：有标签的用户→显示标签、不显示真名/user_id；无标签→保持真名。
-    覆盖 operator 字段、remark、以及 old_value/new_value（重新指派会写名字）。
 
-    context_name_tag: 当前任务/Bug 指派人的 {真名: 标签} 映射（优先用本对象的标签快照）；
-    再用全局「有标签用户」补充历史名字（如改派走掉的人），保证日志里任何带标签的人都被替换。
+def build_assignment_tag_map(db: Session, related_type: str, related_id: int) -> dict:
+    """构建某 task/bug「按标签分配」的人的 {真名: 标签} 映射。
+
+    只收录分配时选了标签（display_tag 非空）的人——按真名分配的不收录、保持真名。
+    用于评论/日志/推送的脱敏，使展示严格跟随「分配时的选择」（需求#2/#3）。
+    requirement 等无指派标签快照的对象返回空 map（不脱敏）。
     """
-    from app.models.user import SysUser as _U
+    name_tag: dict = {}
+    if not related_id:
+        return name_tag
+    if related_type == "task":
+        from app.models.task import BizTaskAssignee
+        rows = db.query(BizTaskAssignee).filter(
+            BizTaskAssignee.task_id == related_id,
+            BizTaskAssignee.display_tag != "",
+        ).all()
+        for r in rows:
+            if r.user and r.user.real_name and r.display_tag:
+                name_tag[r.user.real_name] = r.display_tag
+    elif related_type == "bug":
+        from app.models.bug import BizBug
+        bug = db.query(BizBug).filter(BizBug.id == related_id).first()
+        if bug and bug.assignee and bug.assignee.real_name and bug.assignee_display_tag:
+            name_tag[bug.assignee.real_name] = bug.assignee_display_tag
+    return name_tag
+
+
+def mask_log_items(db: Session, items: list, context_name_tag: dict) -> list:
+    """对流转记录做脱敏：把「按标签分配的人」的真实姓名替换成展示标签。
+
+    规则（严格跟随分配时的选择）：分配时选了标签→显示标签、隐藏真名/user_id；
+    选了真名（或本对象无标签快照）→ 保持真名。覆盖 operator 字段、remark、old_value/new_value。
+
+    context_name_tag: 本任务/Bug「按标签分配」人的 {真名: 标签} 映射（来自分配快照）。
+    不再全局扫描「凡有标签的用户」——避免把按真名分配的人也错误地换成标签（需求#2）。
+    """
     name_tag = dict(context_name_tag or {})
-    for u in db.query(_U).filter(_U.display_tags != "").all():
-        first = (u.display_tags or "").split(",")[0].strip()
-        if u.real_name and first and u.real_name not in name_tag:
-            name_tag[u.real_name] = first
     if not name_tag:
         return items
-    # 长名字优先替换，避免姓名互相包含时替换错
-    names_by_len = sorted((n for n in name_tag if n), key=len, reverse=True)
-
-    def _mask_text(text: str) -> str:
-        if not text:
-            return text
-        for nm in names_by_len:
-            if nm in text:
-                text = text.replace(nm, name_tag[nm])
-        return text
 
     for it in items:
         op = it.get("operator") or {}
@@ -62,10 +84,10 @@ def mask_log_items(db: Session, items: list, context_name_tag: dict) -> list:
             # 隐藏真实 id/username，只留标签当作姓名展示
             it["operator"] = {"id": None, "username": "", "real_name": name_tag[rn]}
         if "remark" in it:
-            it["remark"] = _mask_text(it.get("remark") or "")
+            it["remark"] = mask_text(it.get("remark") or "", name_tag)
         for k in ("old_value", "new_value"):
             if it.get(k):
-                it[k] = _mask_text(it[k])
+                it[k] = mask_text(it[k], name_tag)
     return items
 
 

@@ -100,33 +100,39 @@ def create_comment(
     sender_name = current_user.real_name or current_user.username
     notified_uids = {current_user.id}  # 跳过自己
 
+    # 先取目标对象的标题 + 相关负责人ID（通知文案里带上 需求/任务/Bug 名称）
+    target_title = ""
+    owner_id = None
+    if body.target_type == "task":
+        task = db.query(BizTask).filter(BizTask.id == body.target_id).first()
+        if task:
+            target_title = task.title
+            owner_id = task.assignee_id
+    elif body.target_type == "bug":
+        bug = db.query(BizBug).filter(BizBug.id == body.target_id).first()
+        if bug:
+            target_title = bug.title
+            owner_id = bug.creator_id
+    elif body.target_type == "requirement":
+        req = db.query(BizRequirement).filter(BizRequirement.id == body.target_id).first()
+        if req:
+            target_title = req.title
+            owner_id = req.creator_id
+    title_part = f"《{target_title}》" if target_title else ""
+
     # 1. 通知被@的用户
     if body.mention_user_ids:
         for uid in body.mention_user_ids:
             if uid not in notified_uids:
                 notified_uids.add(uid)
-                notify(db, uid, f"{sender_name} 在{type_label}评论中@了你",
+                notify(db, uid, f"{sender_name} 在{type_label}{title_part}评论中@了你",
                        body.content[:200], type="comment",
                        related_id=body.target_id, related_type=body.target_type)
 
     # 2. 通知相关负责人（未被@的也通知）
-    owner_id = None
-    if body.target_type == "task":
-        task = db.query(BizTask).filter(BizTask.id == body.target_id).first()
-        if task:
-            owner_id = task.assignee_id
-    elif body.target_type == "bug":
-        bug = db.query(BizBug).filter(BizBug.id == body.target_id).first()
-        if bug:
-            owner_id = bug.creator_id
-    elif body.target_type == "requirement":
-        req = db.query(BizRequirement).filter(BizRequirement.id == body.target_id).first()
-        if req:
-            owner_id = req.creator_id
-
     if owner_id and owner_id not in notified_uids:
         notify(db, owner_id, f"{type_label}有新评论",
-               f"{sender_name} 在{type_label}中发表了评论",
+               f"{sender_name} 在{type_label}{title_part}中发表了评论",
                type="comment", related_id=body.target_id, related_type=body.target_type)
 
     db.commit()

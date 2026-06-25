@@ -165,13 +165,13 @@
             <div v-if="showMentionList" class="mention-dropdown">
               <div
                 v-for="(m, idx) in filteredMembers"
-                :key="m.user_id || m.id"
+                :key="m.key"
                 class="mention-item"
                 :class="{ active: idx === mentionIndex }"
                 @mousedown.prevent="selectMention(m)"
               >
-                <el-avatar :size="24">{{ (m.real_name || m.username || '?').charAt(0) }}</el-avatar>
-                <span>{{ m.real_name || m.username }}</span>
+                <el-avatar :size="24">{{ (m.insert || '?').charAt(0) }}</el-avatar>
+                <span>{{ m.label }}</span>
               </div>
               <div v-if="!filteredMembers.length" class="mention-item empty">无匹配成员</div>
             </div>
@@ -684,13 +684,38 @@ async function handleCreateTask() {
   }
 }
 
-const filteredMembers = computed(() => {
-  const keyword = mentionSearch.value.toLowerCase()
-  return projectMembers.value.filter(m => {
-    const name = (m.real_name || m.username || '').toLowerCase()
-    return name.includes(keyword)
-  }).slice(0, 10)
+// @提及 —— 当前用户是否「仅看分配标签」角色
+const isTagOnly = computed(() => !!userStore.userInfo?.tag_only_view)
+
+// @候选：真名 + 各标签都作为可@对象（标签=增加的"模拟人"，不隐藏真名）。
+// 仅看标签角色标签不带归属（看起来像独立的人）；其他角色标签显示「标签（真名）」便于识别。
+const mentionCandidates = computed(() => {
+  const list = []
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    if (name) list.push({ uid, insert: name, label: name, key: `${uid}::` })
+    for (const t of (m.display_tags || [])) {
+      list.push({ uid, insert: t, label: isTagOnly.value ? t : `${t}（${name}）`, key: `${uid}::${t}` })
+    }
+  }
+  return list
 })
+
+const filteredMembers = computed(() => {
+  const kw = mentionSearch.value.toLowerCase()
+  return mentionCandidates.value.filter(c =>
+    c.label.toLowerCase().includes(kw) || c.insert.toLowerCase().includes(kw)
+  ).slice(0, 10)
+})
+
+// 标签 → 归属真名（展示时给「标签@」标注是谁）
+function findTagOwner(handle) {
+  for (const m of projectMembers.value) {
+    if ((m.display_tags || []).includes(handle)) return m.real_name || m.username
+  }
+  return ''
+}
 
 function onCommentInput() {
   const textarea = commentInputRef.value?.$el?.querySelector('textarea') || commentInputRef.value?.textarea
@@ -732,8 +757,7 @@ function selectMention(member) {
   const atMatch = textBefore.match(/@([^@\s]*)$/)
   if (atMatch) {
     const beforeAt = textBefore.substring(0, atMatch.index)
-    const name = member.real_name || member.username
-    newComment.value = beforeAt + '@' + name + ' ' + textAfter
+    newComment.value = beforeAt + '@' + member.insert + ' ' + textAfter
   }
   showMentionList.value = false
   nextTick(() => textarea.focus())
@@ -742,20 +766,33 @@ function selectMention(member) {
 function extractMentionIds(text) {
   const ids = []
   const matches = text.match(/@(\S+)/g) || []
-  for (const m of matches) {
-    const name = m.substring(1)
-    const member = projectMembers.value.find(u => (u.real_name || u.username) === name)
-    if (member) {
-      const uid = member.user_id || member.id
-      if (!ids.includes(uid)) ids.push(uid)
-    }
+  // 句柄(真名或标签) → uid
+  const lookup = {}
+  for (const m of projectMembers.value) {
+    const uid = m.user_id || m.id
+    const name = m.real_name || m.username
+    if (name && !(name in lookup)) lookup[name] = uid
+    for (const t of (m.display_tags || [])) if (t && !(t in lookup)) lookup[t] = uid
+  }
+  for (const mt of matches) {
+    const uid = lookup[mt.substring(1)]
+    if (uid && !ids.includes(uid)) ids.push(uid)
   }
   return ids
 }
 
 function renderMentions(content) {
   if (!content) return ''
-  return content.replace(/@(\S+)/g, '<span class="mention-tag">@$1</span>')
+  // 仅看标签角色：后端已把按标签分配的真名换成标签，这里保持原样
+  // 其他角色：把「标签」@渲染成「标签（真名）」便于识别是谁
+  return content.replace(/@(\S+)/g, (full, handle) => {
+    let shown = handle
+    if (!isTagOnly.value) {
+      const owner = findTagOwner(handle)
+      if (owner && owner !== handle) shown = `${handle}（${owner}）`
+    }
+    return `<span class="mention-tag">@${shown}</span>`
+  })
 }
 
 async function submitComment() {

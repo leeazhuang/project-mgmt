@@ -230,15 +230,11 @@ function canAssign(row) {
   return proj && (proj.tech_leader?.id === uid || proj.owner?.id === uid)
 }
 
-function isDeveloper() {
-  const roles = userStore.userInfo?.roles || []
-  return roles.includes('developer') || roles.some(r => r === 'developer' || r?.code === 'developer')
-}
-
-// 开始修复/标记已解决：仅"开发人员且该Bug指派给他"（或超管）
+// 开始修复/标记已解决：被指派人本人（或超管）即可，与详情页 isAssignee 保持一致
+// （不再额外要求 developer 角色，否则非 developer 的被指派人在列表看不到按钮、无法标记已解决）
 function isMyBug(row) {
   if (_isSuperAdmin()) return true
-  return isDeveloper() && row.assignee?.id === userStore.userInfo?.id
+  return row.assignee?.id === userStore.userInfo?.id
 }
 
 function isMyCreated(row) {

@@ -177,7 +177,16 @@ def send(
             user = ndb.query(SysUser).filter(SysUser.id == user_id).first()
             if not user or not user.wx_room_id:
                 return
-            msg = _build_msg(ndb, title, content, type, related_id, related_type)
+            t, c = title, content
+            # 推送发到微信群（群里可能有「仅看标签」的人），只要内容里出现「按标签分配的人」就一律用标签
+            # ——不按接收人角色判断（否则 @ 给开发本人等非受限接收人时仍会暴露真名）。需求#3。
+            from app.services.data_permission import build_assignment_tag_map, mask_text
+            if related_id and related_type:
+                name_tag = build_assignment_tag_map(ndb, related_type, related_id)
+                if name_tag:
+                    t = mask_text(t, name_tag)
+                    c = mask_text(c, name_tag)
+            msg = _build_msg(ndb, t, c, type, related_id, related_type)
             at_list = [user.wx_user_id] if user.wx_user_id else []
             ok = wx_bot_service.send_group_at(ndb, user.wx_room_id, msg, at_list)
             if not ok:
@@ -216,6 +225,12 @@ def send_to_many(
         ndb = SessionLocal()
         try:
             users = ndb.query(SysUser).filter(SysUser.id.in_(target_ids)).all()
+            # 「按标签分配的人」真名→标签 映射；推送进群一律用标签（不按接收人角色）。需求#3。
+            from app.services.data_permission import build_assignment_tag_map, mask_text
+            name_tag = build_assignment_tag_map(ndb, related_type, related_id) \
+                if (related_id and related_type) else {}
+            t = mask_text(title, name_tag) if name_tag else title
+            c = mask_text(content, name_tag) if name_tag else content
             # 按群分组合并：room_id → (艾特ID列表, 接收人姓名列表)
             rooms: dict = {}
             for user in users:
@@ -228,7 +243,7 @@ def send_to_many(
 
             if not rooms:
                 return
-            msg = _build_msg(ndb, title, content, type, related_id, related_type)
+            msg = _build_msg(ndb, t, c, type, related_id, related_type)
             for room_id, (at_list, names) in rooms.items():
                 ok = wx_bot_service.send_group_at(ndb, room_id, msg, at_list)
                 if not ok:
