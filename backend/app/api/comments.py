@@ -63,6 +63,17 @@ def list_comments(
     ).order_by(BizComment.id.asc()).all()
 
     comment_dicts = [_comment_to_dict(c) for c in comments]
+
+    # 受限角色（仅看标签）：评论作者/内容里「按标签分配的人」真名替换成标签
+    from app.services.data_permission import is_tag_only_viewer
+    if is_tag_only_viewer(current_user):
+        from app.services.data_permission import build_assignment_tag_map, mask_text, mask_user_brief
+        name_tag = build_assignment_tag_map(db, target_type, target_id)
+        if name_tag:
+            for c in comment_dicts:  # 树由同一批 dict 组装，扁平处理即覆盖子评论
+                c["user"] = mask_user_brief(c["user"], name_tag)
+                c["content"] = mask_text(c["content"], name_tag)
+
     tree = _build_comment_tree(comment_dicts, None)
     return ResponseModel(data=tree)
 

@@ -49,7 +49,7 @@
       <div class="desc-section">
         <div class="desc-label">任务描述</div>
         <div class="desc-body">
-          <div v-if="task.description" class="rich-content" v-html="task.description"></div>
+          <div v-if="task.description" class="rich-content" v-html="task.description" @click="onRichClick"></div>
           <span v-else style="color:#999">暂无描述</span>
         </div>
       </div>
@@ -154,8 +154,9 @@
             <template #default="{ row }">{{ row.uploader?.real_name || '-' }}</template>
           </el-table-column>
           <el-table-column prop="created_at" label="上传时间" width="160" />
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="140">
             <template #default="{ row }">
+              <el-button v-if="canPreview(row)" type="success" size="small" text @click="previewFile(row)">预览</el-button>
               <el-button type="primary" size="small" text @click="downloadFile(row)">下载</el-button>
             </template>
           </el-table-column>
@@ -220,17 +221,21 @@
         <el-button type="primary" @click="handleReassign">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 图片预览（富文本图片点击 / 附件图片预览） -->
+    <el-image-viewer v-if="viewerSrc" :url-list="[viewerSrc]" hide-on-click-modal teleported @close="viewerSrc = ''" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElImageViewer } from 'element-plus'
 import { ArrowLeft, Upload } from '@element-plus/icons-vue'
 import { getTask, updateTask, getTaskLogs } from '@/api/task'
 import { listComments, createComment } from '@/api/comment'
-import { listAttachments, getDownloadUrl } from '@/api/attachment'
+import { listAttachments, getDownloadUrl, getPreviewUrl } from '@/api/attachment'
+import { isImageFile, canPreview } from '@/utils/preview'
 import { listMembers } from '@/api/project'
 import { useUserStore } from '@/store/user'
 import RichEditor from '@/components/RichEditor.vue'
@@ -246,6 +251,7 @@ const task = ref({})
 const taskLogs = ref([])
 const comments = ref([])
 const attachments = ref([])
+const viewerSrc = ref('')
 const projectMembers = ref([])
 const activeTab = ref('comments')
 const newComment = ref('')
@@ -627,6 +633,19 @@ function downloadFile(file) {
   window.open(getDownloadUrl(file.id), '_blank')
 }
 
+// 富文本里点击图片 → 放大预览
+function onRichClick(e) {
+  if (e.target && e.target.tagName === 'IMG') {
+    viewerSrc.value = e.target.getAttribute('src')
+  }
+}
+
+// 附件在线预览：图片走图片查看器，其余(PDF/视频/文本等)用 inline 链接新标签打开
+function previewFile(row) {
+  if (isImageFile(row)) viewerSrc.value = getPreviewUrl(row.id)
+  else window.open(getPreviewUrl(row.id), '_blank')
+}
+
 function formatSize(bytes) {
   if (!bytes) return '-'
   if (bytes < 1024) return bytes + ' B'
@@ -660,7 +679,7 @@ onMounted(async () => {
 .desc-label { padding: 12px 16px; font-weight: 600; color: #333; background: #fafafa; border-bottom: 1px solid #ebeef5; }
 .desc-body { padding: 16px; min-height: 60px; }
 .rich-content { line-height: 1.8; word-break: break-word; }
-.rich-content :deep(img) { max-width: 100%; height: auto; border-radius: 4px; }
+.rich-content :deep(img) { max-width: 100%; height: auto; border-radius: 4px; cursor: zoom-in; }
 
 .comment-list { margin-bottom: 20px; }
 .comment-item { display: flex; gap: 12px; margin-bottom: 16px; }

@@ -195,6 +195,15 @@ def my_todo(
         BizBug.status == "fixed",
     ).order_by(BizBug.id.desc()).limit(10).all()
 
+    from app.services.data_permission import is_tag_only_viewer
+    tag_only = is_tag_only_viewer(current_user)
+
+    def _bug_assignee(b):
+        # 受限角色（仅看标签）+ 该 bug 按标签指派 → 只显示标签，隐藏真实指派人
+        if tag_only and b.assignee_display_tag and b.assignee:
+            return {"id": None, "username": "", "real_name": b.assignee_display_tag}
+        return _user_brief(b.assignee) if b.assignee else None
+
     bugs_to_verify_items = [
         {
             "id": b.id,
@@ -202,7 +211,7 @@ def my_todo(
             "project_id": b.project_id,
             "status": b.status,
             "severity": b.severity,
-            "assignee": _user_brief(b.assignee) if b.assignee else None,
+            "assignee": _bug_assignee(b),
         }
         for b in bugs_to_verify
     ]

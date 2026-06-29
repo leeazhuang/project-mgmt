@@ -401,6 +401,13 @@ def get_approval_logs(
         }
         for lg in logs
     ]
+    # 受限角色（仅看标签）：需求流转记录里「按标签分配」的人真名替换成标签，无标签的保持真名
+    # （与任务流转记录脱敏一致；需求的标签快照聚合自其下所有任务的指派子表）
+    from app.services.data_permission import is_tag_only_viewer
+    if is_tag_only_viewer(current_user):
+        from app.services.data_permission import build_assignment_tag_map, mask_log_items
+        ctx = build_assignment_tag_map(db, "requirement", req_id)
+        items = mask_log_items(db, items, ctx)
     return ResponseModel(data=items)
 
 

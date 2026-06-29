@@ -72,7 +72,7 @@
       <div class="desc-section">
         <div class="desc-label">需求描述</div>
         <div class="desc-body">
-          <div v-if="req.description" class="rich-content" v-html="req.description"></div>
+          <div v-if="req.description" class="rich-content" v-html="req.description" @click="onRichClick"></div>
           <span v-else style="color:#999">暂无描述</span>
         </div>
       </div>
@@ -112,7 +112,7 @@
           <el-table-column label="指派给" min-width="140">
             <template #default="{ row }">
               <template v-if="row.assignees && row.assignees.length">
-                {{ row.assignees.map(a => a.user?.real_name || a.user?.username).filter(Boolean).join('、') }}
+                {{ row.assignees.map(a => assigneeLabel(a)).join('、') }}
               </template>
               <template v-else>{{ row.assignee?.real_name || row.assignee?.username || '未指派' }}</template>
             </template>
@@ -202,8 +202,9 @@
             <template #default="{ row }">{{ row.uploader?.real_name || '-' }}</template>
           </el-table-column>
           <el-table-column prop="created_at" label="上传时间" width="160" />
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="140">
             <template #default="{ row }">
+              <el-button v-if="canPreview(row)" type="success" size="small" text @click="previewFile(row)">预览</el-button>
               <el-button type="primary" size="small" text @click="downloadFile(row)">下载</el-button>
             </template>
           </el-table-column>
@@ -306,19 +307,23 @@
         <el-button type="primary" :loading="taskSubmitting" @click="handleCreateTask">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 图片预览（富文本图片点击 / 附件图片预览） -->
+    <el-image-viewer v-if="viewerSrc" :url-list="[viewerSrc]" hide-on-click-modal teleported @close="viewerSrc = ''" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import { ArrowLeft, Upload } from '@element-plus/icons-vue'
 import RichEditor from '@/components/RichEditor.vue'
 import { getRequirement, submitRequirement, approveRequirement, listRequirementLogs, changeRequirementStatus, setEstimatedDeadline, delayRequirement } from '@/api/requirement'
 import { listTasks, createTask } from '@/api/task'
 import { listComments, createComment } from '@/api/comment'
-import { listAttachments, getDownloadUrl, bindAttachments, deleteAttachment } from '@/api/attachment'
+import { listAttachments, getDownloadUrl, getPreviewUrl, bindAttachments, deleteAttachment } from '@/api/attachment'
+import { isImageFile, canPreview } from '@/utils/preview'
 import { listMembers } from '@/api/project'
 import { useUserStore } from '@/store/user'
 
@@ -333,6 +338,7 @@ const approvalLogs = ref([])
 const tasks = ref([])
 const comments = ref([])
 const attachments = ref([])
+const viewerSrc = ref('')
 const activeTab = ref('approval')
 const newComment = ref('')
 const rejectVisible = ref(false)
@@ -377,6 +383,14 @@ function parseTaskSel(selList) {
     if (tag) tags[uid] = tag
   }
   return { ids, tags }
+}
+
+// 关联任务指派人展示：有标签快照→显示标签(真名)，仅看标签角色后端不返回真名则只显示标签
+function assigneeLabel(a) {
+  const tag = a.display_tag
+  const name = a.user?.real_name || a.user?.username
+  if (tag) return name ? `${tag}（${name}）` : tag
+  return name || '未指派'
 }
 
 const taskUploadHeaders = computed(() => ({ Authorization: `Bearer ${localStorage.getItem('token')}` }))
@@ -823,6 +837,19 @@ function downloadFile(file) {
   window.open(getDownloadUrl(file.id), '_blank')
 }
 
+// 富文本里点击图片 → 放大预览
+function onRichClick(e) {
+  if (e.target && e.target.tagName === 'IMG') {
+    viewerSrc.value = e.target.getAttribute('src')
+  }
+}
+
+// 附件在线预览：图片走图片查看器，其余(PDF/视频/文本等)用 inline 链接新标签打开
+function previewFile(row) {
+  if (isImageFile(row)) viewerSrc.value = getPreviewUrl(row.id)
+  else window.open(getPreviewUrl(row.id), '_blank')
+}
+
 function formatSize(bytes) {
   if (!bytes) return '-'
   if (bytes < 1024) return bytes + ' B'
@@ -897,7 +924,7 @@ onMounted(async () => {
 .desc-body { padding: 16px; min-height: 60px; }
 /* 富文本内容样式 */
 .rich-content { line-height: 1.8; word-break: break-word; }
-.rich-content :deep(img) { max-width: 100%; height: auto; border-radius: 4px; }
+.rich-content :deep(img) { max-width: 100%; height: auto; border-radius: 4px; cursor: zoom-in; }
 .rich-content :deep(table) { border-collapse: collapse; width: 100%; }
 .rich-content :deep(td), .rich-content :deep(th) { border: 1px solid #ddd; padding: 8px; }
 </style>

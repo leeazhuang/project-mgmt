@@ -61,7 +61,33 @@ def build_assignment_tag_map(db: Session, related_type: str, related_id: int) ->
         bug = db.query(BizBug).filter(BizBug.id == related_id).first()
         if bug and bug.assignee and bug.assignee.real_name and bug.assignee_display_tag:
             name_tag[bug.assignee.real_name] = bug.assignee_display_tag
+    elif related_type == "requirement":
+        # 需求本身无指派标签快照，聚合其下所有任务「按标签分配」的人
+        from app.models.task import BizTask, BizTaskAssignee
+        task_ids = [tid for (tid,) in db.query(BizTask.id).filter(BizTask.requirement_id == related_id).all()]
+        if task_ids:
+            rows = db.query(BizTaskAssignee).filter(
+                BizTaskAssignee.task_id.in_(task_ids),
+                BizTaskAssignee.display_tag != "",
+            ).all()
+            for r in rows:
+                if r.user and r.user.real_name and r.display_tag:
+                    name_tag[r.user.real_name] = r.display_tag
     return name_tag
+
+
+def mask_user_brief(user_brief: dict, name_tag: dict) -> dict:
+    """若 user_brief（含 real_name）是「按标签分配的人」，隐藏真实 id/username，只留标签当姓名。
+
+    用于评论作者、附件上传人等单个用户展示的脱敏，使其与任务/Bug 指派展示一致。
+    非按标签分配的人保持原样。
+    """
+    if not user_brief or not name_tag:
+        return user_brief
+    rn = user_brief.get("real_name")
+    if rn and rn in name_tag:
+        return {"id": None, "username": "", "real_name": name_tag[rn]}
+    return user_brief
 
 
 def mask_log_items(db: Session, items: list, context_name_tag: dict) -> list:

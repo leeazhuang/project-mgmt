@@ -63,6 +63,16 @@ def list_attachments(
     ).order_by(BizAttachment.id.asc()).all()
 
     items = [_attachment_to_dict(a) for a in attachments]
+
+    # 受限角色（仅看标签）：上传人若是「按标签分配的人」，真名替换成标签
+    from app.services.data_permission import is_tag_only_viewer
+    if is_tag_only_viewer(current_user):
+        from app.services.data_permission import build_assignment_tag_map, mask_user_brief
+        name_tag = build_assignment_tag_map(db, target_type, target_id)
+        if name_tag:
+            for it in items:
+                it["uploader"] = mask_user_brief(it["uploader"], name_tag)
+
     return ResponseModel(data=items)
 
 
@@ -169,6 +179,7 @@ def bind_attachments_to_target(
 def download_attachment(
     attachment_id: int,
     token: Optional[str] = Query(None),
+    inline: int = Query(0, description="1=在线预览(浏览器内联展示)，0=作为附件下载"),
     db: Session = Depends(get_db),
 ):
     att = db.query(BizAttachment).filter(BizAttachment.id == attachment_id).first()
@@ -187,10 +198,11 @@ def download_attachment(
             raise HTTPException(status_code=401, detail="未授权")
 
     if att.storage == "oss":
-        # 图片内联展示（编辑器图片），其他类型按附件下载
+        # 图片或预览模式：不带 attachment 文件名→浏览器内联展示；否则按附件下载
         is_image = (att.file_type or "").startswith("image/")
+        dl_name = "" if (inline or is_image) else att.file_name
         try:
-            url = oss_service.oss_signed_url(db, att.file_path, "" if is_image else att.file_name)
+            url = oss_service.oss_signed_url(db, att.file_path, dl_name)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"获取OSS下载链接失败: {e}")
         return RedirectResponse(url, status_code=302)
@@ -199,6 +211,12 @@ def download_attachment(
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="文件不存在")
 
+    # 预览模式不传 filename → 不加 attachment 头，浏览器内联打开（图片/PDF/视频/文本等）
+    if inline:
+        return FileResponse(
+            path=full_path,
+            media_type=att.file_type or "application/octet-stream",
+        )
     return FileResponse(
         path=full_path,
         filename=att.file_name,
